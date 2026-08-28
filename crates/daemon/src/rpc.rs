@@ -43,11 +43,43 @@ where
             Ok(r) => r,
             Err(_) => return Ok(()), // 客户端断开或帧损坏，结束连接
         };
+        // 事件订阅：响应确认后进入推送长连接，直到客户端断开
+        if req.method == method::Method::EventSubscribe {
+            let resp = Response::ok(req.id, json!({"mode": "stream"}));
+            if let Err(e) = codec::write_frame(&mut stream, &resp).await {
+                tracing::debug!("订阅确认发送失败: {e}");
+                return Ok(());
+            }
+            tracing::info!("GUI 已订阅事件流");
+            return push_events(stream, state).await;
+        }
         let resp = handle_request(&state, req).await;
         // 写响应失败（含帧编码错误）→ 结束连接
         if let Err(e) = codec::write_frame(&mut stream, &resp).await {
             tracing::debug!("写响应失败，断开连接: {e}");
             return Ok(());
+        }
+    }
+}
+
+/// 事件推送循环：广播事件逐帧下发，客户端断开或总线关闭时结束
+async fn push_events<S>(mut stream: S, state: AppState) -> std::io::Result<()>
+where
+    S: AsyncWrite + Unpin,
+{
+    let mut rx = state.events.subscribe();
+    loop {
+        match rx.recv().await {
+            Ok(ev) => {
+                if let Err(e) = codec::write_frame(&mut stream, &ev).await {
+                    tracing::debug!("事件推送结束（客户端断开）: {e}");
+                    return Ok(());
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                tracing::debug!("事件订阅滞后，丢弃 {n} 条旧事件");
+            }
+            Err(_) => return Ok(()), // 总线关闭（daemon 退出）
         }
     }
 }
@@ -121,7 +153,51 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
                 drop(store);
                 state.save_secrets(secrets).await.map_err(internal)?;
             }
+            state.emit(
+                event::EventTopic::ConfigChanged,
+                None,
+                json!({"source": "update"}),
+            );
             Ok(json!({"ok": true}))
+        }
+
+        // ===== 配置导入导出 =====
+        M::ConfigExport => {
+            let store = state.config.lock().await;
+            // 注意：导出包含 services.json 中的环境变量值（与 WebDAV 同步范围一致），
+            // WebDAV 凭据（DPAPI 加密）不导出
+            Ok(json!({
+                "exported_at": chrono::Utc::now().to_rfc3339(),
+                "app_version": env!("CARGO_PKG_VERSION"),
+                "schema_version": cli_companion_domain::SCHEMA_VERSION,
+                "services": store.services,
+                "app": store.app,
+            }))
+        }
+
+        M::ConfigImport => {
+            // 全量替换导入：{services: {...}, app?: {...}}
+            let cfg: ServicesConfig = parse_config_section(&params, "services")?;
+            let app: Option<crate::app_config::AppConfig> = match params.get("app") {
+                Some(v) => Some(serde_json::from_value(v.clone()).map_err(|e| {
+                    RpcError::new(
+                        error::ErrorCode::Validation,
+                        format!("app 配置无效: {e}"),
+                    )
+                })?),
+                None => None,
+            };
+            let count = cfg.services.len();
+            state.save_services(cfg).await.map_err(validation)?;
+            if let Some(app) = app {
+                state.save_app(app).await.map_err(validation)?;
+            }
+            state.emit(
+                event::EventTopic::ConfigChanged,
+                None,
+                json!({"source": "import", "imported_services": count}),
+            );
+            Ok(json!({"ok": true, "imported_services": count}))
         }
 
         // ===== 服务 =====
@@ -151,6 +227,11 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
             }
             cfg.services.push(svc.clone());
             state.save_services(cfg).await.map_err(validation)?;
+            state.emit(
+                event::EventTopic::ConfigChanged,
+                None,
+                json!({"source": "create", "name": svc.name}),
+            );
             Ok(json!({"service": svc}))
         }
 
@@ -180,6 +261,11 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
             }
             cfg.services[pos] = svc.clone();
             state.save_services(cfg).await.map_err(validation)?;
+            state.emit(
+                event::EventTopic::ConfigChanged,
+                None,
+                json!({"source": "update", "name": svc.name}),
+            );
             Ok(json!({"service": svc}))
         }
 
@@ -194,6 +280,11 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
             cfg.services.retain(|s| s.id != id);
             state.save_services(cfg).await.map_err(validation)?;
             state.manager.remove_actor(&id);
+            state.emit(
+                event::EventTopic::ConfigChanged,
+                None,
+                json!({"source": "delete", "service_id": id.to_string()}),
+            );
             Ok(json!({"ok": true}))
         }
 
@@ -208,12 +299,22 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
                 .start(&svc)
                 .await
                 .map_err(|e| RpcError::new(error::ErrorCode::ProcessSpawnFailed, e))?;
+            state.emit(
+                event::EventTopic::ServiceStarted,
+                Some(id.to_string()),
+                json!({"name": svc.name}),
+            );
             Ok(json!({"ok": true}))
         }
 
         M::ServiceStop => {
             let id = parse_id(&params)?;
             state.manager.stop(id).await.map_err(validation)?;
+            state.emit(
+                event::EventTopic::ServiceStopped,
+                Some(id.to_string()),
+                json!({"source": "manual"}),
+            );
             Ok(json!({"ok": true}))
         }
 
@@ -228,6 +329,11 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
                 .restart(&svc)
                 .await
                 .map_err(|e| RpcError::new(error::ErrorCode::ProcessSpawnFailed, e))?;
+            state.emit(
+                event::EventTopic::ServiceStarted,
+                Some(id.to_string()),
+                json!({"name": svc.name, "restart": true}),
+            );
             Ok(json!({"ok": true}))
         }
 
@@ -266,6 +372,7 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
                 .get("stop_services")
                 .and_then(Value::as_bool)
                 .unwrap_or(true);
+            state.emit(event::EventTopic::DaemonShuttingDown, None, json!({}));
             let st = state.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_millis(SHUTDOWN_GRACE_MS)).await;
@@ -274,17 +381,17 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
             Ok(json!({"ok": true}))
         }
 
-        // ===== 配置导入导出（阶段4实现文件对话框集成，当前返回未实现）=====
-        M::ConfigImport | M::ConfigExport => Err(RpcError::new(
-            error::ErrorCode::Validation,
-            "配置导入/导出尚未实现，请直接操作 config/services.json",
-        )),
-
         // ===== 同步 =====
         M::SyncStatus => state.sync.status(state).await,
         M::SyncRunNow => {
             let st = state.clone();
-            state.sync.clone().run(st).await
+            let result = state.sync.clone().run(st).await;
+            state.emit(
+                event::EventTopic::SyncProgress,
+                None,
+                json!({"source": "manual"}),
+            );
+            result
         }
         M::SyncTest => {
             let st = state.clone();
@@ -295,22 +402,24 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
             "V1 未启用 WebDAV LOCK，无需解锁",
         )),
 
-        // ===== 事件 =====
-        M::EventSubscribe => {
-            // V1 使用轮询替代事件流；事件类型保留在协议层备用
-            Ok(json!({
-                "mode": "polling",
-                "topics": [
-                    event::EventTopic::ServiceStarted,
-                    event::EventTopic::ServiceStopped,
-                    event::EventTopic::ConfigChanged,
-                ]
-            }))
-        }
+        // ===== 事件（真实推送在 handle_connection 中拦截，此分支仅为穷尽性匹配兜底）=====
+        M::EventSubscribe => Ok(json!({"mode": "stream"})),
     }
 }
 
 // ===== 参数解析辅助 =====
+
+/// 解析配置段（config.import 用）：缺失或无效均报 Validation
+fn parse_config_section<T: serde::de::DeserializeOwned>(
+    params: &Value,
+    key: &str,
+) -> Result<T, RpcError> {
+    let v = params
+        .get(key)
+        .ok_or_else(|| RpcError::new(error::ErrorCode::Validation, format!("缺少 {key} 字段")))?;
+    serde_json::from_value(v.clone())
+        .map_err(|e| RpcError::new(error::ErrorCode::Validation, format!("{key} 配置无效: {e}")))
+}
 
 fn parse_service(params: &Value) -> Result<ServiceDefinition, RpcError> {
     let v = params

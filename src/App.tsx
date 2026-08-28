@@ -1,6 +1,7 @@
-// 主布局：侧边栏 + 内容区 + Toast + 窗口关闭行为控制
+// 主布局：侧边栏 + 内容区 + Toast + 窗口关闭行为控制 + daemon 事件驱动刷新
 import { useEffect, useState } from "react";
 import { Outlet, NavLink } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   LayoutDashboard,
   ListChecks,
@@ -18,6 +19,7 @@ import { Toasts } from "./shared/components/Toasts";
 import { ConfirmDialog } from "./shared/components/ConfirmDialog";
 import { StopDaemonDialog } from "./features/settings/StopDaemonDialog";
 import { rpc } from "./shared/rpc/client";
+import { useUiStore } from "./stores/uiStore";
 
 const NAV = [
   { to: "/", label: "仪表盘", icon: <LayoutDashboard size={18} aria-hidden /> },
@@ -68,6 +70,51 @@ export function App() {
       void unlisten.then((fn) => fn());
     };
   }, []);
+
+  // ===== daemon 事件流：替代高频轮询，事件到达时精准刷新对应数据 =====
+  // 链路：daemon 事件总线 → gui-core 订阅转发（Rust）→ "daemon-event" → 这里
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    const unlisten = listen<{
+      topic: string;
+      service_id?: string;
+      payload?: { name?: string; exit_code?: number; auto?: boolean };
+    }>("daemon-event", (e) => {
+      const { topic, payload } = e.payload;
+      switch (topic) {
+        case "service.started":
+        case "service.stopped":
+        case "service.health":
+        case "service.restart_attempt":
+          void queryClient.invalidateQueries({ queryKey: ["services"] });
+          break;
+        case "config.changed":
+          void queryClient.invalidateQueries({ queryKey: ["services"] });
+          void queryClient.invalidateQueries({ queryKey: ["config"] });
+          break;
+        case "sync.progress":
+        case "sync.conflict":
+          void queryClient.invalidateQueries({ queryKey: ["sync"] });
+          break;
+        default:
+          break;
+      }
+      // 用户可感知的异常主动提示（正常运行事件不打扰）
+      if (topic === "service.health") {
+        useUiStore.getState().pushToast(
+          "warn",
+          `服务「${payload?.name ?? "未知"}」意外退出（退出码 ${payload?.exit_code ?? "?"}），正在按策略处理`,
+        );
+      } else if (topic === "service.restart_attempt") {
+        useUiStore
+          .getState()
+          .pushToast("err", `服务「${payload?.name ?? "未知"}」自动重启失败或已触发熔断`);
+      }
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [queryClient]);
 
   /** 仅关闭 GUI：daemon 保持运行（exit_app = Rust 侧 app.exit(0)，最可靠） */
   const exitGui = async () => {

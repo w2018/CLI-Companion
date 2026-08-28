@@ -27,6 +27,7 @@ fn test_state(tag: &str) -> AppState {
         as_service: false,
         manager: Arc::new(cli_companion_daemon::manager::ServiceManager::new(
             dirs.clone(),
+            Arc::new(cli_companion_daemon::events::new_bus()),
         )),
         config: Arc::new(AsyncMutex::new(cli_companion_daemon::state::ConfigStore {
             services: cli_companion_domain::ServicesConfig::default(),
@@ -34,6 +35,7 @@ fn test_state(tag: &str) -> AppState {
             secrets: Default::default(),
         })),
         sync: Arc::new(cli_companion_daemon::sync::SyncEngine::new()),
+        events: Arc::new(cli_companion_daemon::events::new_bus()),
         shutdown: Arc::new(tokio::sync::Notify::new()),
         dirs,
     }
@@ -201,11 +203,54 @@ async fn 管道rpc全链路与服务生命周期() {
     let cfg = rpc_call(Method::ConfigGet, None).await.unwrap();
     assert_eq!(cfg["services"]["version"], json!(1));
 
-    // ===== 9. 未知方法 fail closed =====
-    // Method 枚举拒绝未知字符串 → 该测试在协议层已覆盖（method.rs 测试）
+    // ===== 9. config.export / config.import 往返 =====
+    let exported = rpc_call(Method::ConfigExport, None).await.unwrap();
+    assert!(exported["services"].is_object(), "导出应含 services 配置");
+    assert!(exported["app"].is_object(), "导出应含 app 配置");
+    assert!(exported["exported_at"].as_str().is_some());
+    let imported = rpc_call(Method::ConfigImport, Some(json!({
+        "services": exported["services"],
+        "app": exported["app"],
+    })))
+    .await
+    .expect("导入导出的配置应成功");
+    assert_eq!(imported["ok"], json!(true));
+    // 无效导入应被拒绝
+    let bad = rpc_call(Method::ConfigImport, Some(json!({}))).await;
+    assert!(bad.is_err(), "缺少 services 字段的导入应报错");
+
+    // ===== 10. 事件流推送（event.subscribe 长连接）=====
+    // 订阅连接：发送 event.subscribe 后保持连接读事件帧
+    let mut sub_pipe = ClientOptions::new().open(PIPE_NAME).unwrap();
+    let sub_req = Request::new(9001u64, Method::EventSubscribe, None);
+    codec::write_frame(&mut sub_pipe, &sub_req).await.unwrap();
+    let sub_resp: Response = codec::read_frame(&mut sub_pipe).await.unwrap();
+    assert_eq!(sub_resp.into_result().unwrap()["mode"], json!("stream"));
+
+    // 另一连接触发 config.changed 事件
+    rpc_call(Method::ServiceCreate, Some(json!({ "service": svc2() })))
+        .await
+        .expect("创建第二个服务应成功");
+
+    // 订阅连接应在超时前收到事件帧
+    let read_ev = async { codec::read_frame::<serde_json::Value, _>(&mut sub_pipe).await };
+    let ev = tokio::time::timeout(Duration::from_secs(5), read_ev)
+        .await
+        .expect("5 秒内应收到事件")
+        .expect("事件帧应有效");
+    assert_eq!(ev["topic"], json!("config.changed"));
+    assert!(ev["ts"].as_str().is_some());
 
     // ===== 清理 =====
     let _ = std::fs::remove_dir_all(&state.dirs.root);
+}
+
+/// 第二个测试服务的精简定义
+fn svc2() -> ServiceDefinition {
+    ServiceDefinition::new(
+        "事件测试服务",
+        std::path::PathBuf::from("C:\\Windows\\System32\\PING.EXE"),
+    )
 }
 
 /// 检查进程是否存在

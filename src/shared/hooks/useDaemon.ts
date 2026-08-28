@@ -26,13 +26,13 @@ export function useDaemonConnection() {
   return { state, version: q.data?.daemon_version };
 }
 
-/** 服务列表（含运行时状态）：轮询 2s */
+/** 服务列表（含运行时状态）：事件驱动为主（见 App.tsx daemon-event 订阅），低频轮询兜底 */
 export function useServices() {
   return useQuery({
     queryKey: ["services"],
     queryFn: () => rpcSchema(ServiceRowsSchema, "service.list"),
     select: (data) => data.services,
-    refetchInterval: 2000,
+    refetchInterval: 8000,
     retry: 1,
   });
 }

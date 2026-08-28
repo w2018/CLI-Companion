@@ -4,6 +4,8 @@
 //! - 默认：前台进程（开发 / 手动运行），可直接 Ctrl+C 停止
 //! - `--service`：作为 Win32 服务运行（SCM 调度）
 //! - `--install-service` / `--uninstall-service`：安装/卸载服务（需管理员权限）
+//! - `--portable`：便携模式，数据目录固定为 exe 所在目录（写入 portable.marker）
+//! - `--data-dir <dir>`：显式指定数据目录（开发用）
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

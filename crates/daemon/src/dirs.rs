@@ -14,15 +14,34 @@ pub fn data_dir_override() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// 便携模式标志（--portable）：数据目录固定为 exe 所在目录，
+/// 并写入 portable.marker，使 GUI 拉起的后续 daemon 进程同样进入便携模式
+pub fn portable_flag() -> bool {
+    let args: Vec<String> = std::env::args().collect();
+    args.iter().any(|a| a == "--portable")
+}
+
 /// 默认数据根目录选择策略：
-/// 1. 便携模式：exe 同目录存在 portable.marker → 用 exe 目录
+/// 1. 便携模式：--portable 或 exe 同目录存在 portable.marker → 用 exe 目录
+///    （--portable 时写 marker，使后续运行保持便携；目录不可写则放弃便携回退默认）
 /// 2. 开发布局：exe 同目录已有 config/（历史开发数据）→ 沿用
 /// 3. 默认：%LOCALAPPDATA%\CLICompanion（Program Files 安装时必然不可写，
 ///    可变数据绝不能放安装目录 —— 修复安装版 daemon 启动即退出的问题）
 fn default_root() -> PathBuf {
+    let portable = portable_flag();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            if dir.join("portable.marker").is_file() {
+            if portable || dir.join("portable.marker").is_file() {
+                if portable {
+                    match std::fs::write(dir.join("portable.marker"), "") {
+                        Ok(()) => {}
+                        Err(e) => {
+                            // 此时 tracing 尚未初始化（目录解析先于日志初始化），用 stderr 提示
+                            eprintln!("便携模式目录不可写，回退默认数据目录: {e}");
+                            return fallback_root();
+                        }
+                    }
+                }
                 return dir.to_path_buf();
             }
             if dir.join("config").is_dir() {
@@ -30,6 +49,10 @@ fn default_root() -> PathBuf {
             }
         }
     }
+    fallback_root()
+}
+
+fn fallback_root() -> PathBuf {
     std::env::var("LOCALAPPDATA")
         .map(|v| PathBuf::from(v).join("CLICompanion"))
         .unwrap_or_else(|_| PathBuf::from("."))

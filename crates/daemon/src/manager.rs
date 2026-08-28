@@ -2,21 +2,24 @@
 
 use crate::actor::{spawn_actor, ActorCmd, ActorHandle, ActorMap, SharedState};
 use crate::dirs::DataDirs;
+use crate::events::EventTx;
 use cli_companion_domain::{RuntimeState, ServiceDefinition, ServiceId};
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 
 pub struct ServiceManager {
     actors: Mutex<ActorMap>,
     dirs: DataDirs,
+    events: Arc<EventTx>,
 }
 
 impl ServiceManager {
-    pub fn new(dirs: DataDirs) -> Self {
+    pub fn new(dirs: DataDirs, events: Arc<EventTx>) -> Self {
         Self {
             actors: Mutex::new(HashMap::new()),
             dirs,
+            events,
         }
     }
 
@@ -24,7 +27,7 @@ impl ServiceManager {
     pub fn ensure_actor(&self, id: ServiceId) -> ActorHandle {
         let mut map = self.actors.lock().unwrap();
         map.entry(id)
-            .or_insert_with(|| spawn_actor(id, self.dirs.clone()))
+            .or_insert_with(|| spawn_actor(id, self.dirs.clone(), self.events.clone()))
             .clone()
     }
 
@@ -121,7 +124,7 @@ impl ServiceManager {
         // 新增
         for id in ids {
             map.entry(*id)
-                .or_insert_with(|| spawn_actor(*id, self.dirs.clone()));
+                .or_insert_with(|| spawn_actor(*id, self.dirs.clone(), self.events.clone()));
         }
         // 移除已删除的服务 actor
         let to_remove: Vec<ServiceId> = map.keys().filter(|k| !ids.contains(k)).copied().collect();

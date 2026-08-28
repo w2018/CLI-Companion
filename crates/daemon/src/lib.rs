@@ -3,6 +3,7 @@
 pub mod actor;
 pub mod app_config;
 pub mod dirs;
+pub mod events;
 pub mod manager;
 pub mod rpc;
 pub mod service;

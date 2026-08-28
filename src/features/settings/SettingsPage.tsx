@@ -1,8 +1,9 @@
-// 设置页：通用偏好 + 开机自启 + WebDAV 同步 + daemon 控制（启动/停止）
+// 设置页：通用偏好 + 开机自启 + WebDAV 同步 + 配置导入导出 + daemon 控制（启动/停止）
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { rpc, rpcSchema } from "../../shared/rpc/client";
 import { ConfigGetSchema, SyncStatusSchema, type AppConfig } from "../../shared/rpc/schema";
 import { describeError } from "../../shared/rpc/errors";
@@ -10,6 +11,7 @@ import { useDaemonConnection } from "../../shared/hooks/useDaemon";
 import { StopDaemonDialog } from "./StopDaemonDialog";
 import { ConfirmDialog } from "../../shared/components/ConfirmDialog";
 import { useUiStore } from "../../stores/uiStore";
+import { formatDateTime } from "../../shared/utils/format";
 
 export function SettingsPage() {
   const qc = useQueryClient();
@@ -31,6 +33,10 @@ export function SettingsPage() {
   // 需求5：停止 daemon 进度弹窗 + 二次确认（state 必须在条件 return 之前声明）
   const [stopDialogOpen, setStopDialogOpen] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
+  // 配置导入：解析成功后先二次确认再覆盖写入
+  const [pendingImport, setPendingImport] = useState<{ services: unknown; app?: unknown } | null>(
+    null,
+  );
 
   // ===== 开机自启（GUI 开机启动；GUI 启动会自动拉起 daemon）=====
   const [autoStart, setAutoStart] = useState(false);
@@ -147,6 +153,57 @@ export function SettingsPage() {
   // 需求5：停止 daemon → 二次确认 → 打开逐条关闭进度弹窗
   const shutdownDaemon = () => {
     setConfirmStop(true);
+  };
+
+  // ===== 配置备份：导出当前配置 / 导入覆盖 =====
+  const exportConfig = async () => {
+    try {
+      const path = await save({
+        title: "导出配置",
+        defaultPath: `cli-companion-config-${new Date().toISOString().slice(0, 10)}.json`,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!path) return; // 用户取消
+      const data = await rpc<Record<string, unknown>>("config.export");
+      await invoke("write_text_file", { path, contents: JSON.stringify(data, null, 2) });
+      pushToast("ok", `配置已导出：${path}`);
+    } catch (e) {
+      pushToast("err", describeError(e as never));
+    }
+  };
+
+  const importConfig = async () => {
+    try {
+      const picked = await open({
+        title: "选择配置备份文件",
+        multiple: false,
+        directory: false,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (typeof picked !== "string") return; // 用户取消
+      const raw = await invoke<string>("read_text_file", { path: picked });
+      const parsed = JSON.parse(raw) as { services?: unknown; app?: unknown };
+      if (!parsed.services || typeof parsed.services !== "object") {
+        pushToast("err", "文件格式无效：缺少 services 配置段");
+        return;
+      }
+      setPendingImport({ services: parsed.services, app: parsed.app });
+    } catch (e) {
+      pushToast("err", describeError(e as never));
+    }
+  };
+
+  const doImport = async (data: { services: unknown; app?: unknown }) => {
+    setBusy(true);
+    try {
+      const r = await rpc<{ imported_services: number }>("config.import", data);
+      pushToast("ok", `导入完成：共 ${r.imported_services} 个服务`);
+      void qc.invalidateQueries(); // 配置/服务/同步状态全部刷新
+    } catch (e) {
+      pushToast("err", describeError(e as never));
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -317,13 +374,30 @@ export function SettingsPage() {
         {/* 同步状态 */}
         {sync.data && (
           <dl className="mt-3 rounded-lg bg-surface px-3 py-2 text-xs text-muted">
-            <div>上次运行：{sync.data.state.last_run ?? "从未"}</div>
+            <div>上次运行：{formatDateTime(sync.data.state.last_run)}</div>
             {sync.data.state.last_action && <div>结果：{sync.data.state.last_action}</div>}
             {sync.data.state.last_error && (
               <div className="text-err">错误：{sync.data.state.last_error}</div>
             )}
           </dl>
         )}
+      </Section>
+
+      {/* ===== 配置备份 ===== */}
+      <Section title="配置备份">
+        <p className="text-sm text-muted">
+          导出服务与应用配置为 JSON 文件（含环境变量值，请妥善保管）；导入会
+          <span className="font-medium text-content">覆盖</span>
+          当前全部服务配置。WebDAV 凭据不参与导入导出。
+        </p>
+        <div className="flex justify-end gap-2 pt-1">
+          <button onClick={() => void exportConfig()} disabled={busy} className={btnSecondary}>
+            导出配置…
+          </button>
+          <button onClick={() => void importConfig()} disabled={busy} className={btnSecondary}>
+            导入配置…
+          </button>
+        </div>
       </Section>
 
       {/* ===== daemon ===== */}
@@ -377,6 +451,22 @@ export function SettingsPage() {
         onAction={(key) => {
           setConfirmStop(false);
           if (key === "confirm") setStopDialogOpen(true);
+        }}
+      />
+
+      {/* 配置导入：覆盖前二次确认 */}
+      <ConfirmDialog
+        open={pendingImport !== null}
+        title="确认导入配置"
+        message="导入将覆盖当前全部服务配置（运行中服务不受影响）。确定继续吗？"
+        actions={[
+          { key: "cancel", label: "取消" },
+          { key: "confirm", label: "覆盖导入", danger: true },
+        ]}
+        onAction={(key) => {
+          const data = pendingImport;
+          setPendingImport(null);
+          if (key === "confirm" && data) void doImport(data);
         }}
       />
 

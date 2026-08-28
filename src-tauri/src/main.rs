@@ -32,9 +32,13 @@ fn main() {
             gui_core::commands::daemon_rpc,
             gui_core::commands::daemon_status,
             gui_core::commands::ensure_daemon,
-            gui_core::commands::exit_app
+            gui_core::commands::exit_app,
+            gui_core::commands::read_text_file,
+            gui_core::commands::write_text_file
         ])
         .setup(|app| {
+            // daemon 事件流订阅转发：管道长连接 → "daemon-event" Tauri 事件
+            gui_core::events::spawn(app.handle().clone());
             setup_tray(app)?;
             Ok(())
         })

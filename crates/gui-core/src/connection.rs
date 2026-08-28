@@ -12,7 +12,8 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 pub struct DaemonConnection;
 
 impl DaemonConnection {
-    fn next_id() -> u64 {
+    /// 下一个请求 ID（事件订阅连接复用同一计数器）
+    pub fn next_id() -> u64 {
         NEXT_ID.fetch_add(1, Ordering::Relaxed)
     }
 

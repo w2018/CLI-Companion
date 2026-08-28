@@ -2,10 +2,12 @@
 
 use crate::app_config::{load_app, load_secrets, save_app, save_secrets, AppConfig, Secrets};
 use crate::dirs::{atomic_write, DataDirs};
+use crate::events::{make_event, EventTx};
 use crate::manager::ServiceManager;
 use crate::sync::SyncEngine;
 use cli_companion_domain::{ServiceStatus, ServicesConfig};
 use cli_companion_platform::lock::{LockError, SingletonLock};
+use cli_companion_protocol::EventTopic;
 use std::sync::Arc;
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -19,8 +21,23 @@ pub struct AppState {
     /// 配置存储（services + app + secrets），写锁保护
     pub config: Arc<AsyncMutex<ConfigStore>>,
     pub sync: Arc<SyncEngine>,
+    /// 事件总线（event.subscribe 订阅者接收广播）
+    pub events: Arc<EventTx>,
     /// 关闭通知
     pub shutdown: Arc<tokio::sync::Notify>,
+}
+
+impl AppState {
+    /// 广播事件（无订阅者时静默忽略）
+    pub fn emit(
+        &self,
+        topic: EventTopic,
+        service_id: Option<String>,
+        payload: serde_json::Value,
+    ) {
+        let ev = make_event(topic, service_id, payload);
+        let _ = self.events.send(ev);
+    }
 }
 
 /// 配置存储
@@ -141,15 +158,17 @@ pub async fn bootstrap(
     }
 
     // 4. 构建状态
+    let events = Arc::new(crate::events::new_bus());
     let state = AppState {
         as_service,
-        manager: Arc::new(ServiceManager::new(dirs.clone())),
+        manager: Arc::new(ServiceManager::new(dirs.clone(), events.clone())),
         config: Arc::new(AsyncMutex::new(ConfigStore {
             services,
             app,
             secrets,
         })),
         sync: Arc::new(SyncEngine::new()),
+        events,
         shutdown: Arc::new(tokio::sync::Notify::new()),
         dirs,
     };

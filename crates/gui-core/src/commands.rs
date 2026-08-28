@@ -63,3 +63,19 @@ pub async fn exit_app(app: tauri::AppHandle) -> Result<(), String> {
     #[allow(unreachable_code)]
     Ok(())
 }
+
+/// 读取文本文件（配置导入用；限 4MB 防误读大文件）
+#[tauri::command]
+pub async fn read_text_file(path: String) -> Result<String, String> {
+    let meta = std::fs::metadata(&path).map_err(|e| format!("无法访问文件: {e}"))?;
+    if meta.len() > 4 * 1024 * 1024 {
+        return Err("文件超过 4MB，不是有效的配置备份".into());
+    }
+    std::fs::read_to_string(&path).map_err(|e| format!("读取失败: {e}"))
+}
+
+/// 写入文本文件（配置导出用）
+#[tauri::command]
+pub async fn write_text_file(path: String, contents: String) -> Result<(), String> {
+    std::fs::write(&path, contents).map_err(|e| format!("写入失败: {e}"))
+}

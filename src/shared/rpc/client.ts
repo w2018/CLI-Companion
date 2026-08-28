@@ -11,6 +11,8 @@ export type MethodName =
   | "system.info"
   | "config.get"
   | "config.update"
+  | "config.import"
+  | "config.export"
   | "service.list"
   | "service.create"
   | "service.update"

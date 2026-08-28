@@ -5,12 +5,14 @@
 //! - 崩溃自动重启：指数退避 + 10 分钟熔断器
 
 use crate::dirs::DataDirs;
+use crate::events::{make_event, EventTx};
 use chrono::Utc;
 use cli_companion_domain::{
     Backoff, RestartPolicy, RuntimeState, ServiceDefinition, ServiceId, ServiceStatus,
 };
 use cli_companion_platform::console::creation_flags;
 use cli_companion_platform::job::Job;
+use cli_companion_protocol::EventTopic;
 use std::collections::HashMap;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -60,10 +62,12 @@ struct Actor {
     current_def: Option<ServiceDefinition>,
     /// 10 分钟窗口内的重启时间戳（熔断器）
     restart_times: Vec<Instant>,
+    /// 事件总线（崩溃/自动重启事件）
+    events: Arc<EventTx>,
 }
 
 /// 启动 actor 任务并返回句柄
-pub fn spawn_actor(id: ServiceId, dirs: DataDirs) -> ActorHandle {
+pub fn spawn_actor(id: ServiceId, dirs: DataDirs, events: Arc<EventTx>) -> ActorHandle {
     let state = Arc::new(Mutex::new(RuntimeState::default()));
     let (tx, rx) = mpsc::channel(16);
     let actor = Actor {
@@ -75,6 +79,7 @@ pub fn spawn_actor(id: ServiceId, dirs: DataDirs) -> ActorHandle {
         _job: None,
         current_def: None,
         restart_times: Vec::new(),
+        events,
     };
     tokio::spawn(actor.run());
     ActorHandle { tx, state }
@@ -86,6 +91,21 @@ impl Actor {
         if let Ok(mut st) = self.state.lock() {
             f(&mut st);
         }
+    }
+
+    /// 广播事件（payload 扁平携带服务名便于前端展示）
+    fn emit(&self, topic: EventTopic, mut payload: serde_json::Value) {
+        let name = self
+            .current_def
+            .as_ref()
+            .map(|d| d.name.clone())
+            .unwrap_or_default();
+        if let Some(obj) = payload.as_object_mut() {
+            obj.insert("name".into(), serde_json::Value::String(name));
+        }
+        let _ = self
+            .events
+            .send(make_event(topic, Some(self.id.to_string()), payload));
     }
 
     async fn run(mut self) {
@@ -124,12 +144,26 @@ impl Actor {
                             let code = status.code().unwrap_or(-1);
                             tracing::warn!(service = %self.id, "服务意外退出，退出码 {code}");
                             self.on_exit(code);
+                            self.emit(
+                                EventTopic::ServiceHealth,
+                                serde_json::json!({"exit_code": code, "status": "failed"}),
+                            );
                             // 按策略尝试自动重启（熔断器 + 退避等待均满足才启动）
                             if let Some(def) = self.current_def.clone() {
                                 if self.should_auto_restart(&def) && self.wait_backoff(&def).await {
                                     tracing::info!(service = %self.id, "自动重启服务");
-                                    if let Err(e) = self.start(&def).await {
-                                        tracing::error!(service = %self.id, "重启失败: {e}");
+                                    match self.start(&def).await {
+                                        Ok(()) => self.emit(
+                                            EventTopic::ServiceStarted,
+                                            serde_json::json!({"auto": true}),
+                                        ),
+                                        Err(e) => {
+                                            tracing::error!(service = %self.id, "重启失败: {e}");
+                                            self.emit(
+                                                EventTopic::ServiceRestartAttempt,
+                                                serde_json::json!({"ok": false, "error": e}),
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -323,6 +357,10 @@ impl Actor {
         if self.restart_times.len() >= def.restart.max_attempts_10m as usize {
             tracing::error!(service = %self.id, "10 分钟内重启超过 {} 次，触发熔断", def.restart.max_attempts_10m);
             self.update(|s| s.last_health = Some("circuit-breaker".into()));
+            self.emit(
+                EventTopic::ServiceRestartAttempt,
+                serde_json::json!({"ok": false, "circuit_breaker": true}),
+            );
             return false;
         }
         true
