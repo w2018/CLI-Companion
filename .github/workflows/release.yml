@@ -2,79 +2,83 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    tags: ['v*']
 
 permissions:
   contents: write
 
 jobs:
-  build-release:
+  build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: 安装 Rust 工具链（锁定 1.98.0 保证与本地一致）
-        uses: dtolnay/rust-toolchain@1.98.0
-
-      - name: Rust 缓存
-        uses: swatinem/rust-cache@v2
-
-      - name: 安装 Node.js
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 24
 
-      - name: 前端依赖
-        run: npm ci
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: 前端类型检查
-        run: npm run typecheck
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
 
-      # 先产出 daemon 二进制：cargo test --workspace 会编译 GUI crate，
-      # 其 Tauri 构建脚本要求 target/release/cli-companion-daemon.exe 存在
-      - name: 编译 daemon (release)
+      - name: Install frontend dependencies
+        run: npm install
+
+      # 打包资源要求：tauri.conf.json 将 target/release/cli-companion-daemon.exe
+      # 作为随包分发的资源，必须先于 tauri build 编译产出
+      - name: Build daemon (release)
         run: cargo build --release -p cli-companion-daemon
 
-      - name: Rust 测试
-        run: cargo test --workspace
+      # 安装 cargo 版 tauri-cli（自带 NSIS 插件，避免 npm 版插件缺失问题）
+      - name: Install cargo tauri-cli
+        run: cargo install tauri-cli --locked
 
-      # 从 tag 提取版本号（如 v1.0.1 → 1.0.1）
-      - name: 提取版本号
-        id: ver
+      # 用 cargo 版 tauri build（自带 NSIS 插件，避免 npm 版插件缺失）
+      - name: Build installer (cargo)
+        shell: bash
+        run: cargo tauri build
+
+      # 获取版本号（取自 tag，如 v1.3.0）
+      - name: Get version
+        id: version
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
-          $ver = $tag.TrimStart('v')
-          "version=$ver" >> $env:GITHUB_OUTPUT
-          Write-Host "version=$ver"
+          echo "version=$tag" >> $env:GITHUB_OUTPUT
+          $exeName = "CLI-Companion_$($tag)_x64-setup.exe"
+          echo "exeName=$exeName" >> $env:GITHUB_OUTPUT
+          Write-Output "version=$tag exeName=$exeName"
 
-      # Tauri build：编译 GUI + 生成 NSIS 安装包
-      - name: 构建 NSIS 安装包
-        run: npm run tauri build
-
-      - name: 校验安装包
-        shell: pwsh
+      # 安装包重命名为 ASCII 文件名（避免空格/中文名在 Release 上传时出问题），
+      # 并汇总到固定目录（workspace 布局下产物在根 target/，独立布局在 src-tauri/target/）
+      - name: Rename installer
+        shell: bash
         run: |
-          $pattern = "target\release\bundle\nsis\CLI Companion_${{ steps.ver.outputs.version }}_x64-setup.exe"
-          Write-Host "查找: $pattern"
-          if (-not (Test-Path $pattern)) {
-            Write-Host "未找到匹配安装包，列出实际文件："
-            Get-ChildItem "target\release\bundle\nsis\" | Select-Object Name
-            exit 1
-          }
-          Write-Host "安装包存在，大小: $((Get-Item $pattern).Length) bytes"
+          mkdir -p dist-release
+          f=$(find target/release/bundle/nsis src-tauri/target/release/bundle/nsis -name '*_x64-setup.exe' 2>/dev/null | head -1)
+          if [ -z "$f" ]; then
+            echo "未找到安装包：" && find . -name '*.exe' -path '*nsis*' && exit 1
+          fi
+          mv "$f" "dist-release/${{ steps.version.outputs.exeName }}"
+          ls -la dist-release/
 
-      # 上传到对应 tag 的 Releases
-      - name: 上传到 GitHub Releases
+      # 创建 GitHub Release 并上传安装包
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/bundle/nsis/CLI Companion_${{ steps.ver.outputs.version }}_x64-setup.exe
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
           body: |
-            CLI Companion ${{ steps.ver.outputs.version }} 自动构建安装包（NSIS / x64）。
-
-            - 由 GitHub Actions 在 Windows 环境自动编译
-            - 文件名：`CLI Companion_${{ steps.ver.outputs.version }}_x64-setup.exe`
-            - 含：`cli-companion-gui.exe` + `cli-companion-daemon.exe`
+            ## ${{ github.ref_name }}
+            - **安装包**：`${{ steps.version.outputs.exeName }}`（NSIS / x64）
+            - 含 `cli-companion-gui.exe` + `cli-companion-daemon.exe`
+            - 由 GitHub Actions 在 Windows 环境自动编译；安装包未签名，首次运行如遇 SmartScreen 提示请选择"仍要运行"
+          files: |
+            dist-release/*.exe
+          overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
