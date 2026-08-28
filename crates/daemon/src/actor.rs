@@ -268,32 +268,32 @@ impl Actor {
         Ok(())
     }
 
-    /// 停止：taskkill（优雅）→ 超时 → TerminateJobObject（强杀进程树）
+    /// 停止：直接 TerminateJobObject 强杀进程树（不做优雅等待）
+    ///
+    /// 控制台类 CLI 服务普遍不响应 taskkill 的关闭消息，等待宽限期只会拖慢
+    /// 停止与退出流程 —— 按产品决策直接批量强杀，Job Object 保证不留孤儿进程。
     async fn stop(&mut self) -> Result<(), String> {
         let Some(mut child) = self.child.take() else {
             self.update(|s| s.status = ServiceStatus::Stopped);
             return Ok(());
         };
-        let pid = child.id();
         self.update(|s| s.status = ServiceStatus::Stopping);
 
-        let (graceful_ms, kill_ms) = self
+        let kill_ms = self
             .current_def
             .as_ref()
-            .map(|d| (d.stop.graceful_timeout_ms, d.stop.kill_timeout_ms))
-            .unwrap_or((15_000, 10_000));
+            .map(|d| d.stop.kill_timeout_ms)
+            .unwrap_or(10_000);
 
-        // 1. 优雅尝试：taskkill /T 发送关闭消息（控制台程序可能忽略，属正常）
-        #[cfg(windows)]
-        {
-            let _ = Command::new("taskkill")
-                .args(["/pid", &pid.to_string(), "/T"])
-                .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
-                .output();
+        // 强杀进程树（job 覆盖子进程及其全部后代）
+        if let Some(job) = &self._job {
+            if let Err(e) = job.terminate() {
+                tracing::error!(service = %self.id, "TerminateJobObject 失败: {e}");
+            }
         }
 
-        // 2. 等待优雅退出（100ms 快速轮询，尽早发现已退出的进程）
-        let deadline = Instant::now() + Duration::from_millis(graceful_ms);
+        // 等待退出确认（100ms 快速轮询；TerminateJobObject 后通常毫秒级完成）
+        let deadline = Instant::now() + Duration::from_millis(kill_ms);
         let mut exited = false;
         while Instant::now() < deadline {
             if let Ok(Some(_)) = child.try_wait() {
@@ -302,26 +302,8 @@ impl Actor {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-
-        // 3. 强杀进程树
         if !exited {
-            tracing::warn!(service = %self.id, "优雅停止超时，强制终止进程树");
-            if let Some(job) = &self._job {
-                if let Err(e) = job.terminate() {
-                    tracing::error!(service = %self.id, "TerminateJobObject 失败: {e}");
-                }
-            }
-            let kill_deadline = Instant::now() + Duration::from_millis(kill_ms);
-            while Instant::now() < kill_deadline {
-                if let Ok(Some(_)) = child.try_wait() {
-                    exited = true;
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-            if !exited {
-                tracing::error!(service = %self.id, "force_kill_failed：进程树未能终止");
-            }
+            tracing::error!(service = %self.id, "force_kill_failed：进程树未能终止");
         }
 
         let code = child.try_wait().ok().flatten().and_then(|s| s.code());
