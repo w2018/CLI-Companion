@@ -33,6 +33,8 @@ export function Dashboard() {
     retry: false,
   });
 
+  // daemon 不可达时，缓存的运行时状态（运行中/已停止/异常）一律不作为当前状态展示
+  const offline = conn.state === "unavailable";
   const rows = services.data ?? [];
   const running = rows.filter((r) => r.runtime.status === "running").length;
   const failed = rows.filter((r) => r.runtime.status === "failed").length;
@@ -60,19 +62,19 @@ export function Dashboard() {
         <StatCard
           icon={<Play size={26} aria-hidden />}
           label="运行中"
-          value={running}
+          value={offline ? null : running}
           tone="ok"
         />
         <StatCard
           icon={<CircleStop size={26} aria-hidden />}
           label="已停止"
-          value={stopped}
+          value={offline ? null : stopped}
           tone="muted"
         />
         <StatCard
           icon={<Activity size={26} aria-hidden />}
           label="异常"
-          value={failed}
+          value={offline ? null : failed}
           tone="err"
         />
       </div>
@@ -85,7 +87,7 @@ export function Dashboard() {
           </span>
           守护进程
         </h2>
-        {info.data ? (
+        {info.data && !offline ? (
           <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
             <Dt>版本</Dt>
             <Dd>
@@ -100,7 +102,7 @@ export function Dashboard() {
           </dl>
         ) : (
           <p className="text-sm text-muted">
-            {conn.state === "connected" ? "读取中…" : "守护进程不可达：请先启动 daemon"}
+            {offline ? "守护进程不可达：请先启动 daemon" : "读取中…"}
           </p>
         )}
       </section>
@@ -114,13 +116,13 @@ export function Dashboard() {
           </Link>
         </div>
         {/* 需求4：daemon 不可达时明确提示数据为最后已知状态 */}
-        {services.isError && (
+        {offline && (
           <p
             role="alert"
             className="mb-3 flex items-center gap-2 rounded-lg bg-warn/10 px-3 py-2 text-xs text-warn"
           >
             <Activity size={13} aria-hidden />
-            守护进程不可达，以下为最后已知状态（恢复连接后自动刷新）
+            守护进程不可达，服务状态未知（恢复连接后自动刷新）
           </p>
         )}
         {rows.length === 0 ? (
@@ -131,7 +133,7 @@ export function Dashboard() {
         ) : (
           <ul className="space-y-3">
             {rows.slice(0, 8).map((r) => (
-              <ServiceOverviewRow key={r.service.id} row={r} />
+              <ServiceOverviewRow key={r.service.id} row={r} offline={offline} />
             ))}
           </ul>
         )}
@@ -141,13 +143,19 @@ export function Dashboard() {
 }
 
 /** 服务总览行：名称 + 说明 + 创建时间 + 启动时间 + 运行时长 + 状态 */
-function ServiceOverviewRow({ row }: { row: ServiceRow }) {
-  const isRunning = row.runtime.status === "running";
+function ServiceOverviewRow({ row, offline }: { row: ServiceRow; offline: boolean }) {
+  const isRunning = !offline && row.runtime.status === "running";
   return (
     <li className="rounded-xl border border-surface-3 bg-surface-2 p-4 transition-colors hover:border-accent/40">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className="text-sm font-semibold">{row.service.name}</span>
-        <StatusBadge status={row.runtime.status} />
+        {offline ? (
+          <span className="inline-flex items-center gap-1 rounded-full border border-surface-3 bg-surface-3 px-2 py-0.5 text-xs text-muted">
+            状态未知
+          </span>
+        ) : (
+          <StatusBadge status={row.runtime.status} />
+        )}
         {isRunning && (
           <span className="ml-auto inline-flex items-center gap-1 text-xs text-ok">
             <Clock size={12} aria-hidden />
@@ -160,17 +168,21 @@ function ServiceOverviewRow({ row }: { row: ServiceRow }) {
         <FileText size={11} shrink-0 aria-hidden />
         <span className="truncate">{row.service.description || "（无说明）"}</span>
       </p>
-      {/* 时间信息 */}
+      {/* 时间信息（不可达时运行时时间不展示，仅保留配置侧的创建时间） */}
       <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted">
         <span className="inline-flex items-center gap-1">
           <CalendarDays size={11} aria-hidden />
           创建：{formatDateTime(row.service.created_at)}
         </span>
-        <span className="inline-flex items-center gap-1">
-          <Clock size={11} aria-hidden />
-          启动：{formatDateTime(row.runtime.started_at)}
-        </span>
-        {row.runtime.pid != null && <span>PID {row.runtime.pid}</span>}
+        {!offline && (
+          <>
+            <span className="inline-flex items-center gap-1">
+              <Clock size={11} aria-hidden />
+              启动：{formatDateTime(row.runtime.started_at)}
+            </span>
+            {row.runtime.pid != null && <span>PID {row.runtime.pid}</span>}
+          </>
+        )}
       </div>
     </li>
   );
@@ -184,7 +196,8 @@ function StatCard({
 }: {
   icon: React.ReactNode;
   label: string;
-  value: number;
+  /** null = daemon 不可达，状态未知（显示 "—"） */
+  value: number | null;
   tone: "ok" | "muted" | "err";
 }) {
   const toneCls = {
@@ -198,7 +211,9 @@ function StatCard({
       <span className={`rounded-xl p-3 ${toneCls}`}>{icon}</span>
       <div>
         <p className="text-sm text-muted">{label}</p>
-        <p className={`mt-0.5 text-3xl font-bold ${numCls}`}>{value}</p>
+        <p className={`mt-0.5 text-3xl font-bold ${numCls}`}>
+          {value === null ? "—" : value}
+        </p>
       </div>
     </div>
   );
