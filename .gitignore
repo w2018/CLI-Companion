@@ -3,13 +3,13 @@ target/
 dist/
 node_modules/
 
-# ===== 运行时数据（含潜在敏感信息）=====
-data/
-logs/
-cache/
+# ===== 运行时数据（含潜在敏感信息；锚定仓库根目录，避免误伤 src/features/logs 等源码目录）=====
+/data/
+/logs/
+/cache/
 *.lock
 *.lock.tmp
-secrets.json
+/secrets.json
 *.corrupt
 
 # ===== 环境变量与本地配置 =====
