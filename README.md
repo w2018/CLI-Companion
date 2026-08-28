@@ -4,6 +4,12 @@
   <img src="public/app-icon.png" width="96" alt="CLI Companion 图标" />
 </p>
 
+<p align="center">
+  <a href="https://github.com/w2018/CLI-Companion/actions/workflows/ci.yml"><img src="https://github.com/w2018/CLI-Companion/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/w2018/CLI-Companion/releases/latest"><img src="https://img.shields.io/github/v/release/w2018/CLI-Companion" alt="Release" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License" /></a>
+</p>
+
 **CLI 应用辅助** —— Windows 桌面 CLI 服务管家。将多个命令行服务（`java -jar`、`python app.py`、`node server.js`、`nginx.exe`…）集中托管：可视化配置参数、启动/停止/重启、实时日志、崩溃自动恢复、跨设备配置同步。
 
 > 关闭 GUI，服务继续常驻运行；重新打开，状态自动恢复。
@@ -64,11 +70,22 @@ npm run tauri build
 
 ## 安装与使用
 
-1. 下载 [Releases](https://github.com/w2018/CLI-Companion/releases) 中的 `CLI Companion_x.x.x_x64-setup.exe` 安装
+1. 下载 [Releases](https://github.com/w2018/CLI-Companion/releases) 中的 `CLI Companion_x.x.x_x64-setup.exe` 安装（推送 `v*` 标签后由 CI 自动编译上传）
 2. 启动 GUI（自动拉起 daemon），在「服务管理」添加第一个 CLI 服务
 3. 可选：设置页开启「开机自动启动」；或以管理员运行 `cli-companion-daemon.exe --install-service` 注册系统服务
 
-数据目录：`%LOCALAPPDATA%\CLICompanion`（`config/` 配置、`logs/` 日志、`data/` 运行时状态）；在 exe 同目录放置 `portable.marker` 文件即启用便携模式。
+数据目录：`%LOCALAPPDATA%\CLICompanion`（`config/` 配置、`logs/` 日志、`data/` 运行时状态、`cli/` 受管二进制应用）。
+
+便携模式（免安装、U 盘即插即用）：在 GUI 同目录运行 `cli-companion-daemon.exe --portable`，或手动放置 `portable.marker` 文件——数据目录即 exe 所在目录，GUI 与 daemon 共用。
+
+## CI / CD
+
+| 工作流 | 触发 | 内容 |
+|--------|------|------|
+| [CI](.github/workflows/ci.yml) | push / PR | cargo fmt + clippy（`-D warnings`）+ Rust 全量测试 + 前端 typecheck/test/build |
+| [Release](.github/workflows/release.yml) | 推送 `v*` 标签 | 同上检查 → 编译 daemon (release) → `tauri build` 生成 NSIS 安装包 → 自动上传到该标签的 GitHub Releases |
+
+发布流程：更新三处版本号（`Cargo.toml` / `package.json` / `src-tauri/tauri.conf.json`）→ 提交 → `git tag v1.3.0 && git push origin main --tags` → CI 产出安装包并挂到 Releases。
 
 ## 安全
 
