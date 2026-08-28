@@ -34,12 +34,26 @@ pub struct SyncState {
 }
 
 /// 同步报告
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct SyncReport {
     pub action: String,
     pub message: String,
     pub conflict_file: Option<String>,
+    /// cli 目录上传数
+    pub uploaded: u32,
+    /// cli 目录下载数
+    pub downloaded: u32,
+    /// cli 目录跳过数（内容一致）
+    pub skipped: u32,
+}
+
+/// cli 目录同步统计
+#[derive(Debug, Default)]
+struct CliSyncStats {
+    uploaded: u32,
+    downloaded: u32,
+    skipped: u32,
 }
 
 impl SyncEngine {
@@ -114,133 +128,291 @@ impl SyncEngine {
     }
 
     /// 执行一次同步（手动或周期调度共用；busy 锁防并发）
+    ///
+    /// 按设置分项同步：配置文件（services.json）+ 可选 cli 应用目录（递归）。
     pub async fn run(self: Arc<Self>, state: AppState) -> Result<Value, RpcError> {
         let _guard = self.busy.lock().await;
         let (client, settings) = Self::build_client(&state).await?;
-        let remote_path = Self::remote_file_path(&settings);
-
-        // 确保远端目录存在（best effort）
+        let mut sync_st = Self::load_state(&state);
         let dir = settings.remote_dir.trim_matches('/');
+
+        // 确保远端根目录存在
         if let Err(e) = client.mkcol(dir).await {
-            tracing::debug!("mkcol 目录（可能已存在）: {e}");
+            tracing::debug!("mkcol 根目录（可能已存在）: {e}");
         }
 
-        // 本地快照
+        let mut report = SyncReport::default();
+        let mut messages = Vec::new();
+
+        // ===== 1. 同步配置文件 =====
+        if settings.sync_config {
+            let cfg_report = Self::sync_config(
+                &client,
+                &state,
+                &Self::remote_file_path(&settings),
+                &mut sync_st,
+            )
+            .await?;
+            messages.push(cfg_report.message.clone());
+            report.action = cfg_report.action.clone();
+            report.conflict_file = cfg_report.conflict_file;
+        }
+
+        // ===== 2. 同步 cli 应用目录（递归子目录与文件）=====
+        if settings.sync_cli_apps {
+            let remote_cli = format!("{dir}/cli");
+            client
+                .mkcol(&remote_cli)
+                .await
+                .map_err(|e| Self::map_webdav_err(&e))?;
+            let stats = Self::sync_cli_tree(&client, dir, "cli", &state.dirs.cli).await?;
+            report.uploaded += stats.uploaded;
+            report.downloaded += stats.downloaded;
+            report.skipped += stats.skipped;
+            if (stats.uploaded > 0 || stats.downloaded > 0) && report.action == "noop" {
+                report.action = "sync_cli".into();
+            }
+            messages.push(format!(
+                "CLI 应用：上传 {} / 下载 {} / 一致 {}",
+                stats.uploaded, stats.downloaded, stats.skipped
+            ));
+        }
+
+        // 汇总报告
+        if report.message.is_empty() {
+            report.message = messages.join("；");
+        } else {
+            report.message = format!("{}；{}", report.message, messages.join("；"));
+        }
+        if report.action.is_empty() {
+            report.action = "noop".into();
+        }
+
+        // 记录状态
+        sync_st.last_run = Some(Utc::now().to_rfc3339());
+        sync_st.last_direction = Some(report.action.clone());
+        sync_st.last_action = Some(report.message.clone());
+        sync_st.last_error = None;
+        Self::save_state(&state, &sync_st);
+        Ok(serde_json::to_value(report).unwrap_or(Value::Null))
+    }
+
+    /// 同步配置文件（services.json）：内容比较 + LWW 冲突处理
+    async fn sync_config(
+        client: &WebdavClient,
+        state: &AppState,
+        remote_path: &str,
+        sync_st: &mut SyncState,
+    ) -> Result<SyncReport, RpcError> {
         let local_bytes = std::fs::read(state.dirs.services_json())
             .map_err(|e| RpcError::new(ErrorCode::Internal, format!("读取本地配置失败: {e}")))?;
         let local_sha = Self::sha256_hex(&local_bytes);
-        let mut sync_st = Self::load_state(&state);
 
-        let result: Result<SyncReport, RpcError> = async {
-            match client
-                .propfind(&remote_path)
-                .await
-                .map_err(|e| Self::map_webdav_err(&e))?
-            {
-                // 远端不存在 → 首次上传
-                None => {
+        match client
+            .propfind(remote_path)
+            .await
+            .map_err(|e| Self::map_webdav_err(&e))?
+        {
+            // 远端不存在 → 首次上传
+            None => {
+                let etag = client
+                    .put(remote_path, &local_bytes, None)
+                    .await
+                    .map_err(|e| Self::map_webdav_err(&e))?;
+                sync_st.last_synced_etag = Some(etag);
+                sync_st.last_synced_local_sha = Some(local_sha);
+                Ok(SyncReport {
+                    action: "upload".into(),
+                    message: "配置：远端无配置，已上传本地快照".into(),
+                    conflict_file: None,
+                    ..Default::default()
+                })
+            }
+            Some(_) => {
+                // 远端存在：直接 GET 全量内容做变更检测（不依赖 ETag，兼容坚果云）
+                let (remote_bytes, remote_etag) = match client.get(remote_path).await {
+                    Ok(r) => r,
+                    Err(WebdavError::NotFound(_)) => {
+                        let etag = client
+                            .put(remote_path, &local_bytes, None)
+                            .await
+                            .map_err(|e| Self::map_webdav_err(&e))?;
+                        sync_st.last_synced_etag = Some(etag);
+                        sync_st.last_synced_local_sha = Some(local_sha);
+                        return Ok(SyncReport {
+                            action: "upload".into(),
+                            message: "配置：远端无配置，已上传本地快照".into(),
+                            conflict_file: None,
+                            ..Default::default()
+                        });
+                    }
+                    Err(e) => return Err(Self::map_webdav_err(&e)),
+                };
+
+                if remote_bytes == local_bytes {
+                    sync_st.last_synced_etag = remote_etag;
+                    sync_st.last_synced_local_sha = Some(local_sha);
+                    Ok(SyncReport {
+                        action: "noop".into(),
+                        message: "配置：本地与远端一致".into(),
+                        conflict_file: None,
+                        ..Default::default()
+                    })
+                } else if sync_st.last_synced_local_sha.as_deref() == Some(local_sha.as_str()) {
+                    let text = String::from_utf8_lossy(&remote_bytes).to_string();
+                    let cfg = ServicesConfig::from_json(&text).map_err(|e| {
+                        RpcError::new(ErrorCode::Validation, format!("远端配置校验失败: {e}"))
+                    })?;
+                    state
+                        .save_services(cfg)
+                        .await
+                        .map_err(|e| RpcError::new(ErrorCode::Validation, e))?;
+                    sync_st.last_synced_etag = remote_etag;
+                    sync_st.last_synced_local_sha = Some(Self::sha256_hex(&remote_bytes));
+                    Ok(SyncReport {
+                        action: "download".into(),
+                        message: "配置：已应用远端配置".into(),
+                        conflict_file: None,
+                        ..Default::default()
+                    })
+                } else {
+                    // 双方都改 → LWW：远端另存为冲突文件，上传本地
+                    let ts = Utc::now().format("%Y%m%d-%H%M%S");
+                    let conflict_name = format!("services.conflict.{ts}.json");
+                    let conflict_path = state.dirs.cache.join(&conflict_name);
+                    std::fs::write(&conflict_path, &remote_bytes).map_err(|e| {
+                        RpcError::new(ErrorCode::Internal, format!("写入冲突文件失败: {e}"))
+                    })?;
                     let etag = client
-                        .put(&remote_path, &local_bytes, None)
+                        .put(remote_path, &local_bytes, None)
                         .await
                         .map_err(|e| Self::map_webdav_err(&e))?;
                     sync_st.last_synced_etag = Some(etag);
                     sync_st.last_synced_local_sha = Some(local_sha);
                     Ok(SyncReport {
-                        action: "upload".into(),
-                        message: "远端无配置，已上传本地快照".into(),
-                        conflict_file: None,
+                        action: "conflict_lww".into(),
+                        message: "配置：检测到双向修改，已保留本地版本，远端另存为冲突文件".into(),
+                        conflict_file: Some(conflict_path.display().to_string()),
+                        ..Default::default()
                     })
                 }
-                Some(_) => {
-                    // 远端存在：直接 GET 全量内容做变更检测。
-                    // 不依赖 ETag 做变更检测 —— 各服务器 ETag 支持参差（坚果云
-                    // PROPFIND 的 ETag 在响应体），内容比较最可靠；配置文件小，开销可接受。
-                    let (remote_bytes, remote_etag) = match client.get(&remote_path).await {
-                        Ok(r) => r,
-                        Err(WebdavError::NotFound(_)) => {
-                            // 探测存在但 GET 404（竞态）→ 视为首轮上传
-                            let etag = client
-                                .put(&remote_path, &local_bytes, None)
-                                .await
-                                .map_err(|e| Self::map_webdav_err(&e))?;
-                            sync_st.last_synced_etag = Some(etag);
-                            sync_st.last_synced_local_sha = Some(local_sha);
-                            return Ok(SyncReport {
-                                action: "upload".into(),
-                                message: "远端无配置，已上传本地快照".into(),
-                                conflict_file: None,
-                            });
-                        }
-                        Err(e) => return Err(Self::map_webdav_err(&e)),
-                    };
+            }
+        }
+    }
 
-                    if remote_bytes == local_bytes {
-                        // 内容一致：仅刷新基线
-                        sync_st.last_synced_etag = remote_etag;
-                        sync_st.last_synced_local_sha = Some(local_sha);
-                        Ok(SyncReport {
-                            action: "noop".into(),
-                            message: "本地与远端一致".into(),
-                            conflict_file: None,
-                        })
-                    } else if sync_st.last_synced_local_sha.as_deref() == Some(local_sha.as_str()) {
-                        // 本地自上次同步后未改 → 应用远端（先校验 schema）
-                        let text = String::from_utf8_lossy(&remote_bytes).to_string();
-                        let cfg = ServicesConfig::from_json(&text).map_err(|e| {
-                            RpcError::new(ErrorCode::Validation, format!("远端配置校验失败: {e}"))
-                        })?;
-                        state
-                            .save_services(cfg)
-                            .await
-                            .map_err(|e| RpcError::new(ErrorCode::Validation, e))?;
-                        sync_st.last_synced_etag = remote_etag;
-                        sync_st.last_synced_local_sha = Some(Self::sha256_hex(&remote_bytes));
-                        Ok(SyncReport {
-                            action: "download".into(),
-                            message: "已应用远端配置".into(),
-                            conflict_file: None,
-                        })
-                    } else {
-                        // 双方都改了 → LWW：远端另存为冲突文件，上传本地
-                        let ts = Utc::now().format("%Y%m%d-%H%M%S");
-                        let conflict_name = format!("services.conflict.{ts}.json");
-                        let conflict_path = state.dirs.cache.join(&conflict_name);
-                        std::fs::write(&conflict_path, &remote_bytes).map_err(|e| {
-                            RpcError::new(ErrorCode::Internal, format!("写入冲突文件失败: {e}"))
-                        })?;
-                        let etag = client
-                            .put(&remote_path, &local_bytes, None)
-                            .await
-                            .map_err(|e| Self::map_webdav_err(&e))?;
-                        sync_st.last_synced_etag = Some(etag);
-                        sync_st.last_synced_local_sha = Some(local_sha);
-                        Ok(SyncReport {
-                            action: "conflict_lww".into(),
-                            message: "检测到双向修改：已保留本地版本，远端版本另存为冲突文件"
-                                .into(),
-                            conflict_file: Some(conflict_path.display().to_string()),
-                        })
-                    }
+    /// 递归同步 cli 目录：本地 ↔ 远端（双向，仅新增/变更，不删除）。
+    /// 异步递归通过 Box::pin 包装规避 E0733。
+    ///
+    /// - 本地有远端无 / 大小不同 → 上传
+    /// - 远端有本地无 → 下载（目录递归创建）
+    /// - 大小一致 → 跳过
+    async fn sync_cli_tree(
+        client: &WebdavClient,
+        remote_root: &str,
+        rel: &str,
+        local_dir: &std::path::Path,
+    ) -> Result<CliSyncStats, RpcError> {
+        let mut stats = CliSyncStats::default();
+        let remote_dir = if rel.is_empty() {
+            remote_root.to_string()
+        } else {
+            format!("{remote_root}/{rel}")
+        };
+
+        // 远端单层条目（目录不存在时 list_dir 返回空列表）
+        let remote_entries = client
+            .list_dir(&remote_dir)
+            .await
+            .map_err(|e| Self::map_webdav_err(&e))?;
+        let remote_map: std::collections::HashMap<&str, &cli_companion_webdav::RemoteEntry> =
+            remote_entries
+                .iter()
+                .map(|e| (e.name.as_str(), e))
+                .collect();
+
+        // 本地条目（目录不存在时跳过，视为空）
+        let local_entries: Vec<std::path::PathBuf> = match std::fs::read_dir(local_dir) {
+            Ok(rd) => rd.filter_map(|e| e.ok()).map(|e| e.path()).collect(),
+            Err(_) => Vec::new(),
+        };
+
+        // 本地 → 远端
+        for path in &local_entries {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            if name.is_empty() {
+                continue;
+            }
+            let remote_file = format!("{remote_dir}/{name}");
+            if path.is_dir() {
+                // 确保远端子目录存在
+                let _ = client.mkcol(&remote_file).await;
+                let sub_stats = Box::pin(Self::sync_cli_tree(
+                    client,
+                    remote_root,
+                    &format!("{rel}/{name}"),
+                    path,
+                ))
+                .await?;
+                stats.uploaded += sub_stats.uploaded;
+                stats.downloaded += sub_stats.downloaded;
+                stats.skipped += sub_stats.skipped;
+            } else if path.is_file() {
+                let local_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                let remote = remote_map.get(name.as_str());
+                let need_upload = match remote {
+                    None => true,
+                    Some(r) => r.size != Some(local_size) || r.size.is_none(),
+                };
+                if need_upload {
+                    let bytes = std::fs::read(path).map_err(|e| {
+                        RpcError::new(ErrorCode::Internal, format!("读取本地文件失败: {e}"))
+                    })?;
+                    client
+                        .put(&remote_file, &bytes, None)
+                        .await
+                        .map_err(|e| Self::map_webdav_err(&e))?;
+                    stats.uploaded += 1;
+                } else {
+                    stats.skipped += 1;
                 }
             }
         }
-        .await;
 
-        // 记录状态
-        match &result {
-            Ok(report) => {
-                sync_st.last_run = Some(Utc::now().to_rfc3339());
-                sync_st.last_direction = Some(report.action.clone());
-                sync_st.last_action = Some(report.message.clone());
-                sync_st.last_error = None;
+        // 远端 → 本地（仅远端有）
+        for remote in &remote_entries {
+            let local_path = local_dir.join(&remote.name);
+            if local_path.exists() {
+                continue;
             }
-            Err(e) => {
-                sync_st.last_run = Some(Utc::now().to_rfc3339());
-                sync_st.last_error = Some(e.message.clone());
+            let remote_file = format!("{remote_dir}/{}", remote.name);
+            if remote.is_dir {
+                let _ = std::fs::create_dir_all(&local_path);
+                let sub_stats = Box::pin(Self::sync_cli_tree(
+                    client,
+                    remote_root,
+                    &format!("{rel}/{}", remote.name),
+                    &local_path,
+                ))
+                .await?;
+                stats.uploaded += sub_stats.uploaded;
+                stats.downloaded += sub_stats.downloaded;
+                stats.skipped += sub_stats.skipped;
+            } else {
+                let (bytes, _) = client
+                    .get(&remote_file)
+                    .await
+                    .map_err(|e| Self::map_webdav_err(&e))?;
+                std::fs::write(&local_path, &bytes).map_err(|e| {
+                    RpcError::new(ErrorCode::Internal, format!("写入本地文件失败: {e}"))
+                })?;
+                stats.downloaded += 1;
             }
         }
-        Self::save_state(&state, &sync_st);
-        result.map(|r| serde_json::to_value(r).unwrap_or(Value::Null))
+        Ok(stats)
     }
 
     /// 同步状态查询

@@ -272,6 +272,35 @@ export function SettingsPage() {
             }
           />
         </Row>
+        {/* 同步分项：配置文件 / CLI 应用目录 */}
+        <Row label="同步配置文件">
+          <div>
+            <input
+              type="checkbox"
+              className="size-4 accent-[rgb(var(--accent))]"
+              checked={app.webdav.sync_config}
+              onChange={(e) =>
+                setApp({ ...app, webdav: { ...app.webdav, sync_config: e.target.checked } })
+              }
+            />
+            <p className="mt-1 text-xs text-muted">同步 services.json 等服务配置</p>
+          </div>
+        </Row>
+        <Row label="同步 CLI 应用">
+          <div>
+            <input
+              type="checkbox"
+              className="size-4 accent-[rgb(var(--accent))]"
+              checked={app.webdav.sync_cli_apps}
+              onChange={(e) =>
+                setApp({ ...app, webdav: { ...app.webdav, sync_cli_apps: e.target.checked } })
+              }
+            />
+            <p className="mt-1 text-xs text-muted">
+              同步数据目录下 <code className="font-mono">cli\</code> 中的二进制应用（递归子目录与文件）
+            </p>
+          </div>
+        </Row>
 
         <div className="flex flex-wrap justify-end gap-2 pt-2">
           <button onClick={() => runSync("sync.test")} disabled={busy} className={btnSecondary}>

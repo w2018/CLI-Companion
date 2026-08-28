@@ -37,6 +37,107 @@ pub struct RemoteFile {
     pub size: Option<u64>,
 }
 
+/// 远端目录项
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteEntry {
+    /// 条目名（不含目录前缀）
+    pub name: String,
+    pub is_dir: bool,
+    pub etag: Option<String>,
+    pub size: Option<u64>,
+}
+
+/// 解析 PROPFIND multistatus 响应体（Depth:1 列目录）
+///
+/// 提取每个 <response> 的 href、是否集合、getetag、getcontentlength。
+/// 使用 quick-xml 按 local_name（忽略 namespace 前缀）匹配。
+/// 去除 namespace 前缀（"D:response" → "response"）
+fn strip_ns(name: &[u8]) -> &[u8] {
+    match name.iter().rposition(|&b| b == b':') {
+        Some(i) => &name[i + 1..],
+        None => name,
+    }
+}
+
+fn parse_multistatus(body: &str) -> Vec<RemoteEntry> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut reader = Reader::from_str(body);
+    reader.trim_text(true);
+    let mut entries: Vec<RemoteEntry> = Vec::new();
+    let mut buf = Vec::new();
+    let mut cur: Option<RemoteEntry> = None;
+    let mut cur_field: Option<&'static str> = None;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                let qn = e.local_name();
+                let n = strip_ns(qn.as_ref());
+                match n {
+                    b"response" => {
+                        cur = Some(RemoteEntry {
+                            name: String::new(),
+                            is_dir: false,
+                            etag: None,
+                            size: None,
+                        })
+                    }
+                    b"href" if cur.is_some() => cur_field = Some("href"),
+                    b"getetag" if cur.is_some() => cur_field = Some("etag"),
+                    b"getcontentlength" if cur.is_some() => cur_field = Some("size"),
+                    b"collection" if cur.is_some() => {
+                        if let Some(c) = &mut cur {
+                            c.is_dir = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                let qn = e.local_name();
+                let n = strip_ns(qn.as_ref());
+                if n == b"collection" {
+                    if let Some(c) = &mut cur {
+                        c.is_dir = true;
+                    }
+                }
+            }
+            Ok(Event::Text(t)) => {
+                if let Some(c) = &mut cur {
+                    match cur_field {
+                        Some("href") => c.name = t.unescape().unwrap_or_default().to_string(),
+                        Some("etag") => c.etag = Some(t.unescape().unwrap_or_default().to_string()),
+                        Some("size") => {
+                            c.size = t.unescape().unwrap_or_default().trim().parse::<u64>().ok()
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Event::End(e)) => {
+                let qn = e.local_name();
+                let n = strip_ns(qn.as_ref());
+                match n {
+                    b"response" => {
+                        if let Some(c) = cur.take() {
+                            entries.push(c);
+                        }
+                        cur_field = None;
+                    }
+                    b"href" | b"getetag" | b"getcontentlength" => cur_field = None,
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    entries
+}
+
 /// 从 PROPFIND 响应体 XML 提取 getetag 值
 ///
 /// 兼容带命名空间前缀（<D:getetag>）与不带（<getetag>）两种写法，
@@ -192,6 +293,60 @@ impl WebdavClient {
                 }))
             }
             StatusCode::NOT_FOUND => Ok(None),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(WebdavError::Auth),
+            s if s.is_server_error() => Err(WebdavError::Server {
+                status: s.as_u16(),
+                url: url.to_string(),
+            }),
+            s => Err(WebdavError::Server {
+                status: s.as_u16(),
+                url: url.to_string(),
+            }),
+        }
+    }
+
+    /// 列出远端目录（Depth:1 单层），返回目录项列表；目录不存在返回空列表
+    pub async fn list_dir(&self, path: &str) -> Result<Vec<RemoteEntry>, WebdavError> {
+        let url = self.url_for(path)?;
+        let req = self
+            .client
+            .request(
+                reqwest::Method::from_bytes(b"PROPFIND").unwrap(),
+                url.clone(),
+            )
+            .header("Depth", "1")
+            .header(reqwest::header::CONTENT_TYPE, "application/xml");
+        let req = match self.auth() {
+            Some(h) => req.header(reqwest::header::AUTHORIZATION, h),
+            None => req,
+        };
+        let resp = req
+            .body(r#"<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:prop><D:resourcetype/><D:getetag/><D:getcontentlength/></D:prop></D:propfind>"#)
+            .send()
+            .await?;
+        match resp.status() {
+            StatusCode::MULTI_STATUS => {
+                let body = resp.text().await.unwrap_or_default();
+                let entries = parse_multistatus(&body);
+                // 过滤目录自身（href 以请求路径结尾的项），并提取子项名称
+                let base = path.trim_end_matches('/').to_string();
+                Ok(entries
+                    .into_iter()
+                    .filter(|e| {
+                        let t = e.name.trim_end_matches('/');
+                        !t.is_empty()
+                            && !t.eq_ignore_ascii_case(&base)
+                            && !t.ends_with(&format!("/{base}"))
+                    })
+                    .map(|mut e| {
+                        let t = e.name.trim_end_matches('/');
+                        e.name = t.rsplit('/').next().unwrap_or("").to_string();
+                        e
+                    })
+                    .filter(|e| !e.name.is_empty())
+                    .collect())
+            }
+            StatusCode::NOT_FOUND => Ok(Vec::new()),
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(WebdavError::Auth),
             s if s.is_server_error() => Err(WebdavError::Server {
                 status: s.as_u16(),

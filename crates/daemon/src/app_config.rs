@@ -55,6 +55,10 @@ pub struct WebdavSettings {
     pub remote_dir: String,
     pub sync_interval_minutes: u32,
     pub verify_tls: bool,
+    /// 是否同步配置文件（services.json / app.json）
+    pub sync_config: bool,
+    /// 是否同步 cli 目录中的二进制应用（递归子目录与文件）
+    pub sync_cli_apps: bool,
 }
 
 impl Default for WebdavSettings {
@@ -66,6 +70,8 @@ impl Default for WebdavSettings {
             remote_dir: "cli-companion".into(),
             sync_interval_minutes: 15,
             verify_tls: true,
+            sync_config: true,
+            sync_cli_apps: false,
         }
     }
 }

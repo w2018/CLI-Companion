@@ -44,6 +44,8 @@ pub struct DataDirs {
     pub cache: PathBuf,
     /// 每个服务的日志目录
     pub service_logs: PathBuf,
+    /// 存放受管二进制应用的目录（可随 WebDAV 同步）
+    pub cli: PathBuf,
 }
 
 impl DataDirs {
@@ -55,8 +57,9 @@ impl DataDirs {
         let logs = root.join("logs");
         let cache = root.join("cache");
         let service_logs = logs.join("services");
+        let cli = root.join("cli");
         // 确保目录存在
-        for dir in [&config, &data, &logs, &cache, &service_logs] {
+        for dir in [&config, &data, &logs, &cache, &service_logs, &cli] {
             let _ = std::fs::create_dir_all(dir);
         }
         Self {
@@ -66,6 +69,7 @@ impl DataDirs {
             logs,
             cache,
             service_logs,
+            cli,
         }
     }
 

@@ -116,6 +116,8 @@ export const AppConfigSchema = z.object({
     remote_dir: z.string(),
     sync_interval_minutes: z.number(),
     verify_tls: z.boolean(),
+    sync_config: z.boolean(),
+    sync_cli_apps: z.boolean(),
   }),
 });
 export type AppConfig = z.infer<typeof AppConfigSchema>;

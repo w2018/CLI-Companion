@@ -78,6 +78,8 @@ describe("AppConfigSchema", () => {
         remote_dir: "cli-companion",
         sync_interval_minutes: 15,
         verify_tls: true,
+        sync_config: true,
+        sync_cli_apps: false,
       },
     };
     expect(AppConfigSchema.safeParse(app).success).toBe(true);
