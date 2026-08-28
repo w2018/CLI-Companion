@@ -106,6 +106,8 @@ impl SyncEngine {
         let code = match e {
             WebdavError::Auth => ErrorCode::WebdavAuth,
             WebdavError::Network(_) => ErrorCode::WebdavServer,
+            // 409/412 前置条件冲突：远端已被修改或目录状态异常
+            WebdavError::PreconditionFailed => ErrorCode::Conflict,
             _ => ErrorCode::WebdavProtocol,
         };
         RpcError::new(code, e.to_string())

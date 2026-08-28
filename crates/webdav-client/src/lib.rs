@@ -216,8 +216,10 @@ impl WebdavClient {
         let resp = req.send().await?;
         match resp.status() {
             // 201 创建成功；405 已存在；200/204 部分服务器返回
+            // 409 Conflict：多数服务器（含坚果云）在目录已存在时返回 409，
+            // 视为"目录已存在"，幂等成功
             StatusCode::CREATED | StatusCode::OK | StatusCode::NO_CONTENT => Ok(()),
-            StatusCode::METHOD_NOT_ALLOWED => Ok(()), // 目录已存在
+            StatusCode::METHOD_NOT_ALLOWED | StatusCode::CONFLICT => Ok(()),
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(WebdavError::Auth),
             s => Err(WebdavError::Server {
                 status: s.as_u16(),
@@ -279,7 +281,11 @@ impl WebdavClient {
                     .map(String::from);
                 Ok(etag.unwrap_or_default())
             }
-            StatusCode::PRECONDITION_FAILED => Err(WebdavError::PreconditionFailed),
+            StatusCode::PRECONDITION_FAILED | StatusCode::CONFLICT => {
+                // 412 或 409：前置条件冲突（If-Match 不匹配 / 远端已被修改），
+                // 语义等价，走统一的"远端已变更"处理路径
+                Err(WebdavError::PreconditionFailed)
+            }
             StatusCode::LOCKED => Err(WebdavError::Locked),
             StatusCode::TOO_MANY_REQUESTS => Err(WebdavError::TooManyRequests),
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(WebdavError::Auth),

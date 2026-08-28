@@ -11,8 +11,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 安装 Rust 工具链
-        uses: dtolnay/rust-toolchain@stable
+      - name: 安装 Rust 工具链（锁定 1.98.0 保证与本地一致）
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: clippy, rustfmt
 

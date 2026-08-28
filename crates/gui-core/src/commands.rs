@@ -1,10 +1,14 @@
 //! Tauri 命令定义（放在子模块以避免宏命名冲突）
 
 use crate::connection::DaemonConnection;
+use cli_companion_protocol::error::ErrorCode;
 
 /// 通用 RPC 转发命令：前端 invoke("daemon_rpc", { method, params })
 ///
 /// 错误以 JSON 字符串返回（RpcError 序列化），前端解析后得到稳定错误码。
+///
+/// 容错：若 daemon 未运行（已被停止或崩溃），自动从同目录拉起后重试一次，
+/// 保证 GUI 任意操作（含同步）都不需要用户手动启动 daemon。
 #[tauri::command]
 pub async fn daemon_rpc(
     method: String,
@@ -15,8 +19,21 @@ pub async fn daemon_rpc(
     let method: cli_companion_protocol::Method =
         serde_json::from_value(method_value).map_err(|e| format!("未知或非法的方法名: {e}"))?;
 
-    match DaemonConnection::call(method, params).await {
+    // 直接调用（daemon 运行时零额外开销）
+    match DaemonConnection::call(method, params.clone()).await {
         Ok(v) => Ok(v),
+        Err(e) if e.code == ErrorCode::DaemonUnavailable => {
+            // daemon 不可达 → 自动拉起 → 重试一次
+            tracing::warn!("daemon 不可达，自动拉起后重试: {e}");
+            DaemonConnection::ensure_daemon().await?;
+            match DaemonConnection::call(method, params).await {
+                Ok(v) => Ok(v),
+                Err(e2) => {
+                    tracing::warn!("拉起后重试仍失败: {e2}");
+                    Err(serde_json::to_string(&e2).unwrap_or(e2.message))
+                }
+            }
+        }
         Err(e) => {
             tracing::warn!("RPC 失败: {e}");
             Err(serde_json::to_string(&e).unwrap_or(e.message))
