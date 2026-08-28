@@ -72,6 +72,8 @@ export function StopDaemonDialog({ open, mode = "stop", onClose, onFinished }: P
 
       // 3. 全部服务处理完毕 → 停止守护进程本体（也在列表中显示状态）
       setStep(DAEMON_STEP_ID, "stopping");
+      // 先关闭 GUI 侧的"不可达即自动拉起"，否则 8s 轮询会立刻把 daemon 复活
+      await invoke("set_daemon_autostart", { allowed: false }).catch(() => {});
       try {
         await rpc("daemon.shutdown", { stop_services: false });
       } catch {

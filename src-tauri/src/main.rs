@@ -32,6 +32,7 @@ fn main() {
             gui_core::commands::daemon_rpc,
             gui_core::commands::daemon_status,
             gui_core::commands::ensure_daemon,
+            gui_core::commands::set_daemon_autostart,
             gui_core::commands::exit_app,
             gui_core::commands::read_text_file,
             gui_core::commands::write_text_file

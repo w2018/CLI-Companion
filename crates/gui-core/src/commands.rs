@@ -2,6 +2,14 @@
 
 use crate::connection::DaemonConnection;
 use cli_companion_protocol::error::ErrorCode;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// 显式停止 daemon 后抑制"不可达即自动拉起"。
+///
+/// 否则前端的周期轮询（服务列表 8s 等）会在 daemon 停止后触发自动拉起，
+/// daemon 复活并按 autostart 把服务全部重新拉起来 —— "停止 daemon"形同虚设。
+/// 仅设置页手动"启动 daemon"（ensure_daemon 命令）会解除抑制。
+static AUTO_SPAWN_SUPPRESSED: AtomicBool = AtomicBool::new(false);
 
 /// 通用 RPC 转发命令：前端 invoke("daemon_rpc", { method, params })
 ///
@@ -23,6 +31,10 @@ pub async fn daemon_rpc(
     match DaemonConnection::call(method, params.clone()).await {
         Ok(v) => Ok(v),
         Err(e) if e.code == ErrorCode::DaemonUnavailable => {
+            // 用户刚显式停止 daemon：不自动拉起，直接把"不可达"返回给前端
+            if AUTO_SPAWN_SUPPRESSED.load(Ordering::SeqCst) {
+                return Err(serde_json::to_string(&e).unwrap_or(e.message));
+            }
             // daemon 不可达 → 自动拉起 → 重试一次
             tracing::warn!("daemon 不可达，自动拉起后重试: {e}");
             DaemonConnection::ensure_daemon().await?;
@@ -47,10 +59,19 @@ pub async fn daemon_status() -> Result<bool, String> {
     Ok(DaemonConnection::is_alive().await)
 }
 
-/// 确保 daemon 在运行（未运行则从同目录拉起）；前端启动时首先调用
+/// 确保 daemon 在运行（未运行则从同目录拉起）；前端启动时首先调用。
+/// 这是显式的用户动作：解除"停止后抑制自动拉起"。
 #[tauri::command]
 pub async fn ensure_daemon() -> Result<bool, String> {
+    AUTO_SPAWN_SUPPRESSED.store(false, Ordering::SeqCst);
     DaemonConnection::ensure_daemon().await
+}
+
+/// 设置 daemon 自动拉起开关（显式停止 daemon 前由前端关闭）
+#[tauri::command]
+pub async fn set_daemon_autostart(allowed: bool) -> Result<(), String> {
+    AUTO_SPAWN_SUPPRESSED.store(!allowed, Ordering::SeqCst);
+    Ok(())
 }
 
 /// 退出 GUI 应用（不经过窗口关闭流程，daemon 作为独立进程不受影响）
