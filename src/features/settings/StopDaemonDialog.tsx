@@ -2,6 +2,7 @@
 // 性能：服务并行停止（总时长 = 最慢者），但每条完成时独立更新 UI，保留逐条视觉效果
 import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, XCircle, Loader2, Hourglass, Server } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import { rpc } from "../../shared/rpc/client";
 import { describeError } from "../../shared/rpc/errors";
 import type { ServiceDefinition } from "../../shared/rpc/schema";
@@ -75,6 +76,13 @@ export function StopDaemonDialog({ open, mode = "stop", onClose, onFinished }: P
         await rpc("daemon.shutdown", { stop_services: false });
       } catch {
         // daemon 已自行退出（不可达）：目标已达成，不算失败
+      }
+      // 4. 确认 daemon 真正退出（管道不可达即成功；兜底最多等 4 秒）
+      const deadline = Date.now() + 4000;
+      while (Date.now() < deadline) {
+        const alive = await invoke<boolean>("daemon_status").catch(() => false);
+        if (!alive) break;
+        await new Promise((r) => setTimeout(r, 300));
       }
       setStep(DAEMON_STEP_ID, "stopped");
       setPhase("done");
