@@ -21,7 +21,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'"
+      "csp": "default-src 'self'; connect-src 'self' https://api.github.com; style-src 'self' 'unsafe-inline'; script-src 'self'"
     }
   },
   "bundle": {
