@@ -14,6 +14,7 @@ import {
 import { useServices, useServiceAction } from "../../shared/hooks/useDaemon";
 import { StatusBadge } from "../../shared/components/StatusBadge";
 import { EmptyState } from "../../shared/components/EmptyState";
+import { ConfirmDialog } from "../../shared/components/ConfirmDialog";
 import { useUiStore } from "../../stores/uiStore";
 import { describeError } from "../../shared/rpc/errors";
 import { ServiceForm } from "./ServiceForm";
@@ -26,6 +27,8 @@ export function ServiceList() {
   const pushToast = useUiStore((s) => s.pushToast);
   const [editing, setEditing] = useState<ServiceRow | null>(null);
   const [creating, setCreating] = useState(false);
+  // 删除二次确认（需求：删除必须有明确二次确认对话框）
+  const [deleteTarget, setDeleteTarget] = useState<ServiceRow | null>(null);
 
   const rows = useMemo(() => data ?? [], [data]);
 
@@ -35,9 +38,7 @@ export function ServiceList() {
       "service.start" | "service.stop" | "service.restart" | "service.delete"
     >,
     row: ServiceRow,
-    confirmMsg?: string,
   ) => {
-    if (confirmMsg && !window.confirm(confirmMsg)) return;
     action.mutate(
       { method, service_id: row.service.id },
       {
@@ -129,9 +130,11 @@ export function ServiceList() {
                   ) : (
                     <IconBtn
                       label={`停止 ${row.service.name}`}
-                      onClick={() =>
-                        doAction("service.stop", row, `确定停止「${row.service.name}」吗？`)
+                      onClick={() => {
+                      if (window.confirm(`确定停止「${row.service.name}」吗？`)) {
+                        doAction("service.stop", row);
                       }
+                    }}
                       disabled={action.isPending}
                     >
                       <Square size={15} aria-hidden />
@@ -139,9 +142,11 @@ export function ServiceList() {
                   )}
                   <IconBtn
                     label={`重启 ${row.service.name}`}
-                    onClick={() =>
-                      doAction("service.restart", row, `确定重启「${row.service.name}」吗？`)
-                    }
+                    onClick={() => {
+                      if (window.confirm(`确定重启「${row.service.name}」吗？`)) {
+                        doAction("service.restart", row);
+                      }
+                    }}
                     disabled={action.isPending}
                   >
                     <RefreshCw size={15} aria-hidden />
@@ -161,13 +166,7 @@ export function ServiceList() {
                   </IconBtn>
                   <IconBtn
                     label={`删除 ${row.service.name}`}
-                    onClick={() =>
-                      doAction(
-                        "service.delete",
-                        row,
-                        `确定删除「${row.service.name}」吗？运行中的服务会先被停止。`,
-                      )
-                    }
+                    onClick={() => setDeleteTarget(row)}
                     disabled={action.isPending}
                   >
                     <Trash2 size={15} aria-hidden />
@@ -188,6 +187,27 @@ export function ServiceList() {
           }}
         />
       )}
+
+      {/* 删除二次确认 */}
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title="确认删除服务"
+        message={
+          deleteTarget
+            ? `确定删除「${deleteTarget.service.name}」吗？\n运行中的服务会先被停止，删除后不可恢复。`
+            : ""
+        }
+        actions={[
+          { key: "cancel", label: "取消" },
+          { key: "confirm", label: "确认删除", danger: true },
+        ]}
+        onAction={(key) => {
+          if (key === "confirm" && deleteTarget) {
+            doAction("service.delete", deleteTarget);
+          }
+          setDeleteTarget(null);
+        }}
+      />
     </div>
   );
 }
