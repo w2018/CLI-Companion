@@ -1,0 +1,12 @@
+[package]
+name = "cli-companion-test-support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "测试辅助：fixture 程序、配置样例、mock 传输"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+cli-companion-protocol.workspace = true
+cli-companion-domain.workspace = true

@@ -1,0 +1,13 @@
+[package]
+name = "cli-companion-domain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CLI Companion 领域模型：服务定义、配置、迁移、运行时状态"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+thiserror.workspace = true

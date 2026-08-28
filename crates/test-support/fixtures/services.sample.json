@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "services": [
+    {
+      "id": "a2b9c0d1-0000-4000-8000-000000000001",
+      "name": "示例代理",
+      "description": "演示运行时参数",
+      "enabled": true,
+      "autostart": true,
+      "exe": "C:/Program Files/Example/agent.exe",
+      "args": [
+        {"id": "a1", "key": "--bind", "value": "127.0.0.1:7000", "enabled": true, "kind": "option", "description": ""},
+        {"id": "a2", "key": "--verbose", "value": null, "enabled": false, "kind": "flag", "description": ""}
+      ],
+      "argument_delimiter": " ",
+      "working_dir": "C:/Program Files/Example/data",
+      "env": [],
+      "run_as": {"kind": "current_user"},
+      "console": {"mode": "new_console_visible", "startup": "normal"},
+      "stop": {"signal": "ctrl_c", "graceful_timeout_ms": 15000, "kill_timeout_ms": 10000},
+      "health": {"kind": "process", "interval_ms": 5000, "failure_threshold": 3, "success_threshold": 1},
+      "restart": {"policy": "always", "max_attempts_10m": 10, "backoff": {"initial_ms": 2000, "max_ms": 300000, "multiplier": 2}},
+      "labels": [],
+      "created_at": "2026-08-28T08:00:00+08:00",
+      "updated_at": "2026-08-28T08:00:00+08:00"
+    }
+  ]
+}

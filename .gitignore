@@ -1,0 +1,37 @@
+# ===== 构建产物 =====
+target/
+dist/
+node_modules/
+
+# ===== 运行时数据（含潜在敏感信息）=====
+data/
+logs/
+cache/
+*.lock
+*.lock.tmp
+secrets.json
+*.corrupt
+
+# ===== 环境变量与本地配置 =====
+.env
+.env.*
+*.local
+
+# ===== 内部文档（不推送到公开仓库）=====
+docs/
+CLI应用辅助开发计划.md
+
+# ===== 开发临时目录 =====
+.dev-data/
+.obsidian/
+
+# ===== IDE =====
+.idea/
+.vscode/
+*.iml
+*.suo
+*.user
+
+# ===== Windows =====
+Thumbs.db
+Desktop.ini

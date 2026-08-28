@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ===== 设计 token（浅色主题为默认；跟随系统偏好切换）===== */
+:root {
+  --surface: 248 249 251;
+  --surface-2: 255 255 255;
+  --surface-3: 228 231 236;
+  --content: 24 26 38;
+  --muted: 110 116 130;
+  --accent: 9 105 218;
+  --ok: 26 127 55;
+  --warn: 154 103 0;
+  --err: 207 34 46;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface: 18 20 28;
+    --surface-2: 26 29 40;
+    --surface-3: 45 49 62;
+    --content: 232 234 240;
+    --muted: 148 154 168;
+    --accent: 80 151 255;
+    --ok: 63 185 80;
+    --warn: 210 153 34;
+    --err: 248 81 73;
+  }
+}
+
+body {
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 滚动条 */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgb(var(--surface-3));
+  border-radius: 5px;
+}
+
+/* 尊重 prefers-reduced-motion：关闭过渡动画 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

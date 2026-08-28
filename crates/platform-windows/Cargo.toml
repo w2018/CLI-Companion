@@ -1,0 +1,20 @@
+[package]
+name = "cli-companion-platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Windows 平台层：Job Object、单例锁、DPAPI、控制台标志"
+
+[dependencies]
+thiserror.workspace = true
+tracing.workspace = true
+cli-companion-domain.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_System_Memory",
+    "Win32_Security_Cryptography",
+] }

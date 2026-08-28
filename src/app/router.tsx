@@ -1,0 +1,22 @@
+// 路由定义（开发文档 §7.1）
+import { createBrowserRouter } from "react-router-dom";
+import { App } from "../App";
+import { Dashboard } from "../features/dashboard/Dashboard";
+import { ServiceList } from "../features/services/ServiceList";
+import { LogViewer } from "../features/logs/LogViewer";
+import { SettingsPage } from "../features/settings/SettingsPage";
+import { AboutPage } from "../features/about/AboutPage";
+
+export const router = createBrowserRouter([
+  {
+    path: "/",
+    element: <App />,
+    children: [
+      { index: true, element: <Dashboard /> },
+      { path: "services", element: <ServiceList /> },
+      { path: "logs/:serviceId", element: <LogViewer /> },
+      { path: "settings", element: <SettingsPage /> },
+      { path: "about", element: <AboutPage /> },
+    ],
+  },
+]);

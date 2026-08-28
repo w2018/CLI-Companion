@@ -1,0 +1,49 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/protocol",
+    "crates/domain",
+    "crates/platform-windows",
+    "crates/daemon",
+    "crates/gui-core",
+    "crates/webdav-client",
+    "crates/test-support",
+    "src-tauri",
+]
+
+[workspace.package]
+version = "1.0.1"
+edition = "2021"
+rust-version = "1.77"
+license = "MIT"
+
+[workspace.dependencies]
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+
+# 类型与校验
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+anyhow = "1"
+
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
+# Tauri
+tauri = { version = "2", features = [] }
+
+# 内部 crate
+cli-companion-protocol = { path = "crates/protocol" }
+cli-companion-domain = { path = "crates/domain" }
+cli-companion-platform = { path = "crates/platform-windows" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

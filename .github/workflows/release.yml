@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust 缓存
+        uses: swatinem/rust-cache@v2
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: 前端依赖
+        run: npm ci
+
+      - name: 前端类型检查
+        run: npm run typecheck
+
+      - name: Rust 测试
+        run: cargo test --workspace
+
+      - name: 编译 daemon (release)
+        run: cargo build --release -p cli-companion-daemon
+
+      # 从 tag 提取版本号（如 v1.0.1 → 1.0.1）
+      - name: 提取版本号
+        id: ver
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $ver = $tag.TrimStart('v')
+          "version=$ver" >> $env:GITHUB_OUTPUT
+          Write-Host "version=$ver"
+
+      # Tauri build：编译 GUI + 生成 NSIS 安装包
+      - name: 构建 NSIS 安装包
+        run: npm run tauri build
+
+      - name: 校验安装包
+        shell: pwsh
+        run: |
+          $pattern = "target\release\bundle\nsis\CLI Companion_${{ steps.ver.outputs.version }}_x64-setup.exe"
+          Write-Host "查找: $pattern"
+          if (-not (Test-Path $pattern)) {
+            Write-Host "未找到匹配安装包，列出实际文件："
+            Get-ChildItem "target\release\bundle\nsis\" | Select-Object Name
+            exit 1
+          }
+          Write-Host "安装包存在，大小: $((Get-Item $pattern).Length) bytes"
+
+      # 上传到对应 tag 的 Releases
+      - name: 上传到 GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/bundle/nsis/CLI Companion_${{ steps.ver.outputs.version }}_x64-setup.exe
+          body: |
+            CLI Companion ${{ steps.ver.outputs.version }} 自动构建安装包（NSIS / x64）。
+
+            - 由 GitHub Actions 在 Windows 环境自动编译
+            - 文件名：`CLI Companion_${{ steps.ver.outputs.version }}_x64-setup.exe`
+            - 含：`cli-companion-gui.exe` + `cli-companion-daemon.exe`
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

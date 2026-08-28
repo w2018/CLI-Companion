@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Rust 缓存
+        uses: swatinem/rust-cache@v2
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Rust 格式检查
+        run: cargo fmt --check --all
+
+      - name: Clippy 静态检查
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Rust 单元测试 + 集成测试
+        run: cargo test --workspace
+
+      - name: 安装前端依赖
+        run: npm ci
+
+      - name: 前端类型检查
+        run: npm run typecheck
+
+      - name: 前端测试
+        run: npm test
+
+      - name: 前端构建
+        run: npm run build

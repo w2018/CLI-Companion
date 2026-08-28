@@ -1,0 +1,18 @@
+[package]
+name = "cli-companion-gui-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GUI 核心层：Tauri 命令边界 + daemon 管道客户端"
+
+[lib]
+name = "gui_core"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+cli-companion-protocol.workspace = true
+cli-companion-platform.workspace = true
+tauri = { version = "2", features = ["tray-icon"] }

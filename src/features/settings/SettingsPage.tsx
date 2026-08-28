@@ -1,0 +1,387 @@
+// 设置页：通用偏好 + 开机自启 + WebDAV 同步 + daemon 控制（启动/停止）
+import { useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { invoke } from "@tauri-apps/api/core";
+import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
+import { rpc, rpcSchema } from "../../shared/rpc/client";
+import { ConfigGetSchema, SyncStatusSchema, type AppConfig } from "../../shared/rpc/schema";
+import { describeError } from "../../shared/rpc/errors";
+import { useDaemonConnection } from "../../shared/hooks/useDaemon";
+import { StopDaemonDialog } from "./StopDaemonDialog";
+import { ConfirmDialog } from "../../shared/components/ConfirmDialog";
+import { useUiStore } from "../../stores/uiStore";
+
+export function SettingsPage() {
+  const qc = useQueryClient();
+  const pushToast = useUiStore((s) => s.pushToast);
+
+  const cfg = useQuery({
+    queryKey: ["config"],
+    queryFn: () => rpcSchema(ConfigGetSchema, "config.get"),
+  });
+  const sync = useQuery({
+    queryKey: ["sync"],
+    queryFn: () => rpcSchema(SyncStatusSchema, "sync.status"),
+    refetchInterval: 10_000,
+  });
+
+  const [app, setApp] = useState<AppConfig | null>(null);
+  const [webdavPwd, setWebdavPwd] = useState("");
+  const [busy, setBusy] = useState(false);
+  // 需求5：停止 daemon 进度弹窗 + 二次确认（state 必须在条件 return 之前声明）
+  const [stopDialogOpen, setStopDialogOpen] = useState(false);
+  const [confirmStop, setConfirmStop] = useState(false);
+
+  // ===== 开机自启（GUI 开机启动；GUI 启动会自动拉起 daemon）=====
+  const [autoStart, setAutoStart] = useState(false);
+  useEffect(() => {
+    isEnabled()
+      .then(setAutoStart)
+      .catch(() => setAutoStart(false));
+  }, []);
+  const toggleAutoStart = async (on: boolean) => {
+    setBusy(true);
+    try {
+      if (on) await enable();
+      else await disable();
+      setAutoStart(on);
+      pushToast("ok", on ? "已开启开机自启" : "已关闭开机自启");
+    } catch (e) {
+      pushToast("err", describeError(e as never));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // ===== daemon 启停 =====
+  const { state: daemonState } = useDaemonConnection();
+  const startDaemon = async () => {
+    setBusy(true);
+    try {
+      const ok = await invoke<boolean>("ensure_daemon");
+      pushToast(ok ? "ok" : "err", ok ? "daemon 已启动" : "daemon 启动失败（exe 缺失或启动出错）");
+      void qc.invalidateQueries();
+    } catch (e) {
+      pushToast("err", String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // config 加载后同步到本地编辑态
+  useEffect(() => {
+    if (cfg.data) setApp(cfg.data.app);
+  }, [cfg.data]);
+
+  // 错误态：明确提示 + 启动 daemon + 重试，绝不卡在"加载中"
+  if (cfg.isError) {
+    return (
+      <div className="mx-auto max-w-3xl pt-10">
+        <div className="rounded-xl border border-err/40 bg-err/5 p-6 text-center">
+          <p className="text-sm font-medium text-err">无法读取设置</p>
+          <p className="mt-1 text-xs text-muted">
+            {cfg.error instanceof Error ? cfg.error.message : "daemon 连接失败"}
+          </p>
+          <div className="mt-4 flex justify-center gap-2">
+            {/* 修复需求4：daemon 关闭后可在此一键重新启动 */}
+            <button
+              onClick={() => void startDaemon()}
+              disabled={busy}
+              className="min-h-9 rounded-lg bg-ok px-4 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+            >
+              启动守护进程
+            </button>
+            <button
+              onClick={() => void cfg.refetch()}
+              className="min-h-9 rounded-lg border border-surface-3 px-4 text-sm hover:bg-surface-3"
+            >
+              重试
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (cfg.isPending || !app) {
+    return <p className="py-10 text-center text-sm text-muted">加载中…</p>;
+  }
+
+  const saveApp = async (okMsg = "设置已保存") => {
+    setBusy(true);
+    try {
+      // 密码输入框有内容时一并提交（密码经 DPAPI 加密，前端不回显）
+      await rpc("config.update", {
+        app,
+        ...(webdavPwd ? { webdav_password: webdavPwd } : {}),
+      });
+      setWebdavPwd("");
+      void qc.invalidateQueries({ queryKey: ["config"] });
+      pushToast("ok", okMsg);
+      void qc.invalidateQueries({ queryKey: ["config"] });
+      void qc.invalidateQueries({ queryKey: ["sync"] });
+    } catch (e) {
+      pushToast("err", describeError(e as never));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runSync = async (method: "sync.run_now" | "sync.test") => {
+    setBusy(true);
+    try {
+      if (method === "sync.run_now") {
+        // 先保存设置（含密码）再手动同步
+        await saveApp("设置已保存，开始同步");
+      }
+      const r = await rpc<{ action?: string; message?: string; ok?: boolean }>(method);
+      pushToast("ok", r.message ?? r.action ?? "完成");
+      void qc.invalidateQueries({ queryKey: ["sync"] });
+    } catch (e) {
+      pushToast("err", describeError(e as never));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // 需求5：停止 daemon → 二次确认 → 打开逐条关闭进度弹窗
+  const shutdownDaemon = () => {
+    setConfirmStop(true);
+  };
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-6">
+      <header>
+        <h1 className="text-xl font-semibold">设置</h1>
+      </header>
+
+      {/* ===== 通用 ===== */}
+      <Section title="通用">
+        <Row label="语言">
+          <select
+            className={inputCls}
+            value={app.general.language}
+            onChange={(e) =>
+              setApp({ ...app, general: { ...app.general, language: e.target.value } })
+            }
+          >
+            <option value="zh-CN">简体中文</option>
+            <option value="en">English</option>
+          </select>
+        </Row>
+        {/* 需求②①：开机自启（GUI 自启，GUI 启动会自动拉起 daemon） */}
+        <Row label="开机自动启动">
+          <input
+            type="checkbox"
+            className="size-4 accent-[rgb(var(--accent))]"
+            checked={autoStart}
+            disabled={busy}
+            onChange={(e) => void toggleAutoStart(e.target.checked)}
+          />
+          <p className="mt-1 text-xs text-muted">登录 Windows 后自动启动 GUI 并拉起 daemon</p>
+        </Row>
+        {/* 需求②②：关闭行为 */}
+        <Row label="关闭窗口时最小化到托盘">
+          <input
+            type="checkbox"
+            className="size-4 accent-[rgb(var(--accent))]"
+            checked={app.general.close_to_tray}
+            onChange={(e) =>
+              setApp({ ...app, general: { ...app.general, close_to_tray: e.target.checked } })
+            }
+          />
+          <p className="mt-1 text-xs text-muted">
+            开启：点关闭按钮隐藏到托盘；关闭：点关闭按钮时弹窗确认退出方式
+          </p>
+        </Row>
+        <div className="flex justify-end pt-2">
+          <button onClick={() => saveApp()} disabled={busy} className={btnPrimary}>
+            保存通用设置
+          </button>
+        </div>
+      </Section>
+
+      {/* ===== WebDAV 同步 ===== */}
+      <Section title="WebDAV 配置同步">
+        <Row label="启用同步">
+          <input
+            type="checkbox"
+            className="size-4 accent-[rgb(var(--accent))]"
+            checked={app.webdav.enabled}
+            onChange={(e) =>
+              setApp({ ...app, webdav: { ...app.webdav, enabled: e.target.checked } })
+            }
+          />
+        </Row>
+        <Row label="服务器 URL">
+          <input
+            className={`${inputCls} font-mono text-xs`}
+            placeholder="https://dav.example.com/dav/"
+            value={app.webdav.url}
+            onChange={(e) => setApp({ ...app, webdav: { ...app.webdav, url: e.target.value } })}
+          />
+        </Row>
+        <Row label="用户名">
+          <input
+            className={inputCls}
+            value={app.webdav.username}
+            onChange={(e) => setApp({ ...app, webdav: { ...app.webdav, username: e.target.value } })}
+          />
+        </Row>
+        <Row label="密码">
+          <input
+            className={inputCls}
+            type="password"
+            placeholder={sync.data?.password_set ? "已保存（输入可更新）" : "输入密码"}
+            value={webdavPwd}
+            onChange={(e) => setWebdavPwd(e.target.value)}
+          />
+          <p className="mt-1 text-xs text-muted">
+            密码经 DPAPI 加密存本机，不参与同步、不显示明文
+          </p>
+        </Row>
+        <Row label="远端目录">
+          <input
+            className={`${inputCls} font-mono text-xs`}
+            value={app.webdav.remote_dir}
+            onChange={(e) => setApp({ ...app, webdav: { ...app.webdav, remote_dir: e.target.value } })}
+          />
+        </Row>
+        <Row label="同步间隔（分钟）">
+          <input
+            className={`${inputCls} w-28`}
+            type="number"
+            min={1}
+            max={1440}
+            value={app.webdav.sync_interval_minutes}
+            onChange={(e) =>
+              setApp({
+                ...app,
+                webdav: { ...app.webdav, sync_interval_minutes: Number(e.target.value) || 15 },
+              })
+            }
+          />
+        </Row>
+        <Row label="校验 TLS 证书">
+          <input
+            type="checkbox"
+            className="size-4 accent-[rgb(var(--accent))]"
+            checked={app.webdav.verify_tls}
+            onChange={(e) =>
+              setApp({ ...app, webdav: { ...app.webdav, verify_tls: e.target.checked } })
+            }
+          />
+        </Row>
+
+        <div className="flex flex-wrap justify-end gap-2 pt-2">
+          <button onClick={() => runSync("sync.test")} disabled={busy} className={btnSecondary}>
+            测试连接
+          </button>
+          <button onClick={() => runSync("sync.run_now")} disabled={busy} className={btnSecondary}>
+            立即同步
+          </button>
+          <button onClick={() => saveApp()} disabled={busy} className={btnPrimary}>
+            保存同步设置
+          </button>
+        </div>
+
+        {/* 同步状态 */}
+        {sync.data && (
+          <dl className="mt-3 rounded-lg bg-surface px-3 py-2 text-xs text-muted">
+            <div>上次运行：{sync.data.state.last_run ?? "从未"}</div>
+            {sync.data.state.last_action && <div>结果：{sync.data.state.last_action}</div>}
+            {sync.data.state.last_error && (
+              <div className="text-err">错误：{sync.data.state.last_error}</div>
+            )}
+          </dl>
+        )}
+      </Section>
+
+      {/* ===== daemon ===== */}
+      <Section title="守护进程">
+        <div className="flex items-center gap-2 text-sm">
+          <span
+            className={`size-2 rounded-full ${daemonState === "connected" ? "bg-ok" : "bg-err"}`}
+            aria-hidden
+          />
+          当前状态：
+          <span className={daemonState === "connected" ? "text-ok" : "text-err"}>
+            {daemonState === "connected" ? "运行中" : "未运行"}
+          </span>
+        </div>
+        <p className="text-sm text-muted">
+          关闭 GUI 不影响 daemon 与受管服务。停止 daemon 会同时停止全部受管服务；
+          停止后可在此重新启动。
+        </p>
+        <div className="flex justify-end gap-2 pt-1">
+          {/* 修复：daemon 停止后可重新手动启动 */}
+          <button
+            onClick={() => void startDaemon()}
+            disabled={busy || daemonState === "connected"}
+            className="min-h-9 rounded-lg border border-ok/50 px-4 text-sm text-ok hover:bg-ok/10 disabled:opacity-40"
+          >
+            启动 daemon
+          </button>
+          <button
+            onClick={shutdownDaemon}
+            disabled={busy || daemonState !== "connected"}
+            className="min-h-9 rounded-lg border border-err/50 px-4 text-sm text-err hover:bg-err/10 disabled:opacity-40"
+          >
+            停止 daemon（含全部服务）
+          </button>
+        </div>
+      </Section>
+
+      {/* 需求5：停止前二次确认 */}
+      <ConfirmDialog
+        open={confirmStop}
+        title="确认停止守护进程"
+        message={
+          daemonState === "connected"
+            ? "即将停止全部受管服务并关闭守护进程，停止过程会逐条显示进度。确定继续吗？"
+            : "确定要停止守护进程吗？"
+        }
+        actions={[
+          { key: "cancel", label: "取消" },
+          { key: "confirm", label: "确认停止", danger: true },
+        ]}
+        onAction={(key) => {
+          setConfirmStop(false);
+          if (key === "confirm") setStopDialogOpen(true);
+        }}
+      />
+
+      {/* 需求5：逐条服务关闭进度弹窗 */}
+      <StopDaemonDialog
+        open={stopDialogOpen}
+        onClose={() => setStopDialogOpen(false)}
+        onFinished={() => {
+          void qc.invalidateQueries();
+        }}
+      />
+    </div>
+  );
+}
+
+const inputCls =
+  "h-9 w-full max-w-md rounded-lg border border-surface-3 bg-surface px-3 text-sm focus:border-accent focus:outline-none";
+const btnPrimary = "min-h-9 rounded-lg bg-accent px-4 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50";
+const btnSecondary = "min-h-9 rounded-lg border border-surface-3 px-4 text-sm hover:bg-surface-3 disabled:opacity-50";
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="space-y-3 rounded-xl border border-surface-3 bg-surface-2 p-5">
+      <h2 className="text-sm font-semibold">{title}</h2>
+      {children}
+    </section>
+  );
+}
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <span className="shrink-0 text-sm">{label}</span>
+      <div className="flex-1 text-right">{children}</div>
+    </div>
+  );
+}
