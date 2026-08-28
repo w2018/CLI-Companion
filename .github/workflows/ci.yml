@@ -24,6 +24,11 @@ jobs:
         with:
           node-version: 24
 
+      # Tauri 构建脚本要求 target/release/cli-companion-daemon.exe 存在
+      # （tauri.conf.json 将其作为打包资源），必须先于 clippy/test 编译产出
+      - name: 编译 daemon (release)
+        run: cargo build --release -p cli-companion-daemon
+
       - name: Rust 格式检查
         run: cargo fmt --check --all
 

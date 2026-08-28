@@ -15,15 +15,20 @@ const SHUTDOWN_GRACE_MS: u64 = 200;
 
 /// 命名管道服务端主循环
 pub async fn run_pipe_server(state: AppState) -> std::io::Result<()> {
+    run_pipe_server_on(state, PIPE_NAME).await
+}
+
+/// 在指定管道名上运行服务端（集成测试用独立管道，避免与真实 daemon 冲突）
+pub async fn run_pipe_server_on(state: AppState, pipe_name: &str) -> std::io::Result<()> {
     let mut server = ServerOptions::new()
         .first_pipe_instance(true)
-        .create(PIPE_NAME)?;
-    tracing::info!(pipe = PIPE_NAME, "命名管道已监听");
+        .create(pipe_name)?;
+    tracing::info!(pipe = pipe_name, "命名管道已监听");
     loop {
         server.connect().await?;
         // 立即创建下一个实例，保证并发连接
         let client = server;
-        server = ServerOptions::new().create(PIPE_NAME)?;
+        server = ServerOptions::new().create(pipe_name)?;
         let st = state.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_connection(client, st).await {
@@ -180,10 +185,7 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
             let cfg: ServicesConfig = parse_config_section(&params, "services")?;
             let app: Option<crate::app_config::AppConfig> = match params.get("app") {
                 Some(v) => Some(serde_json::from_value(v.clone()).map_err(|e| {
-                    RpcError::new(
-                        error::ErrorCode::Validation,
-                        format!("app 配置无效: {e}"),
-                    )
+                    RpcError::new(error::ErrorCode::Validation, format!("app 配置无效: {e}"))
                 })?),
                 None => None,
             };

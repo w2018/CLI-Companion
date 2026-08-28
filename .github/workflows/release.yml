@@ -31,11 +31,13 @@ jobs:
       - name: 前端类型检查
         run: npm run typecheck
 
-      - name: Rust 测试
-        run: cargo test --workspace
-
+      # 先产出 daemon 二进制：cargo test --workspace 会编译 GUI crate，
+      # 其 Tauri 构建脚本要求 target/release/cli-companion-daemon.exe 存在
       - name: 编译 daemon (release)
         run: cargo build --release -p cli-companion-daemon
+
+      - name: Rust 测试
+        run: cargo test --workspace
 
       # 从 tag 提取版本号（如 v1.0.1 → 1.0.1）
       - name: 提取版本号

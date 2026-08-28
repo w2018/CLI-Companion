@@ -29,12 +29,7 @@ pub struct AppState {
 
 impl AppState {
     /// 广播事件（无订阅者时静默忽略）
-    pub fn emit(
-        &self,
-        topic: EventTopic,
-        service_id: Option<String>,
-        payload: serde_json::Value,
-    ) {
+    pub fn emit(&self, topic: EventTopic, service_id: Option<String>, payload: serde_json::Value) {
         let ev = make_event(topic, service_id, payload);
         let _ = self.events.send(ev);
     }

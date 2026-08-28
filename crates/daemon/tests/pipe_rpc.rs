@@ -6,7 +6,6 @@ use std::os::windows::process::CommandExt;
 
 use cli_companion_daemon::state::AppState;
 use cli_companion_domain::{ConsoleMode, ServiceDefinition};
-use cli_companion_platform::PIPE_NAME;
 use cli_companion_protocol::codec;
 use cli_companion_protocol::method::Method;
 use cli_companion_protocol::{Request, Response};
@@ -17,6 +16,12 @@ use tokio::net::windows::named_pipe::ClientOptions;
 use tokio::sync::Mutex as AsyncMutex;
 
 // ===== 测试辅助 =====
+
+/// 测试专用管道名（每测试进程唯一，避免与真实 daemon 或其他进程冲突）
+fn test_pipe() -> &'static str {
+    static PIPE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    PIPE.get_or_init(|| format!(r"\\.\pipe\cli-companion-test-{}", std::process::id()))
+}
 
 /// 构造独立 AppState（临时目录，不影响真实配置）
 fn test_state(tag: &str) -> AppState {
@@ -47,7 +52,7 @@ async fn rpc_call(
     params: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, cli_companion_protocol::RpcError> {
     use cli_companion_protocol::error::ErrorCode;
-    let mut pipe = ClientOptions::new().open(PIPE_NAME).map_err(|_| {
+    let mut pipe = ClientOptions::new().open(test_pipe()).map_err(|_| {
         cli_companion_protocol::RpcError::new(ErrorCode::DaemonUnavailable, "daemon 不可达")
     })?;
     static ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(10000);
@@ -108,11 +113,11 @@ fn sleeper_service(name: &str, seconds: u32) -> ServiceDefinition {
 #[tokio::test(flavor = "multi_thread")]
 async fn 管道rpc全链路与服务生命周期() {
     let state = test_state("rpc");
-    // 启动 RPC 服务端
+    // 启动 RPC 服务端（独立测试管道，避免与正在运行的真实 daemon 冲突）
     {
         let st = state.clone();
         tokio::spawn(async move {
-            let _ = cli_companion_daemon::rpc::run_pipe_server(st).await;
+            let _ = cli_companion_daemon::rpc::run_pipe_server_on(st, test_pipe()).await;
         });
     }
     wait_pipe_ready().await;
@@ -208,10 +213,13 @@ async fn 管道rpc全链路与服务生命周期() {
     assert!(exported["services"].is_object(), "导出应含 services 配置");
     assert!(exported["app"].is_object(), "导出应含 app 配置");
     assert!(exported["exported_at"].as_str().is_some());
-    let imported = rpc_call(Method::ConfigImport, Some(json!({
-        "services": exported["services"],
-        "app": exported["app"],
-    })))
+    let imported = rpc_call(
+        Method::ConfigImport,
+        Some(json!({
+            "services": exported["services"],
+            "app": exported["app"],
+        })),
+    )
     .await
     .expect("导入导出的配置应成功");
     assert_eq!(imported["ok"], json!(true));
@@ -221,7 +229,7 @@ async fn 管道rpc全链路与服务生命周期() {
 
     // ===== 10. 事件流推送（event.subscribe 长连接）=====
     // 订阅连接：发送 event.subscribe 后保持连接读事件帧
-    let mut sub_pipe = ClientOptions::new().open(PIPE_NAME).unwrap();
+    let mut sub_pipe = ClientOptions::new().open(test_pipe()).unwrap();
     let sub_req = Request::new(9001u64, Method::EventSubscribe, None);
     codec::write_frame(&mut sub_pipe, &sub_req).await.unwrap();
     let sub_resp: Response = codec::read_frame(&mut sub_pipe).await.unwrap();

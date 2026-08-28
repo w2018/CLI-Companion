@@ -35,7 +35,9 @@ async fn run_once(app: &tauri::AppHandle) -> Result<(), String> {
         .open(PIPE_NAME)
         .map_err(|_| "daemon 管道不可达".to_string())?;
     let req = Request::new(DaemonConnection::next_id(), Method::EventSubscribe, None);
-    codec::write_frame(&mut pipe, &req).await.map_err(|e| e.to_string())?;
+    codec::write_frame(&mut pipe, &req)
+        .await
+        .map_err(|e| e.to_string())?;
     let resp: Response = codec::read_frame(&mut pipe)
         .await
         .map_err(|e| e.to_string())?;
