@@ -44,6 +44,10 @@ pub enum Method {
     // 守护进程
     #[serde(rename = "daemon.shutdown")]
     DaemonShutdown,
+    #[serde(rename = "daemon.logs")]
+    DaemonLogs,
+    #[serde(rename = "daemon.logs.clear")]
+    DaemonLogsClear,
 
     // 同步
     #[serde(rename = "sync.status")]
@@ -80,6 +84,8 @@ impl Method {
             Method::ServiceLogs => "service.logs",
             Method::ServiceLogsClear => "service.logs.clear",
             Method::DaemonShutdown => "daemon.shutdown",
+            Method::DaemonLogs => "daemon.logs",
+            Method::DaemonLogsClear => "daemon.logs.clear",
             Method::SyncStatus => "sync.status",
             Method::SyncRunNow => "sync.run_now",
             Method::SyncUnlock => "sync.unlock",
@@ -113,6 +119,8 @@ mod tests {
             Method::ServiceLogs,
             Method::ServiceLogsClear,
             Method::DaemonShutdown,
+            Method::DaemonLogs,
+            Method::DaemonLogsClear,
             Method::SyncStatus,
             Method::SyncRunNow,
             Method::SyncUnlock,

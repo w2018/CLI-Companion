@@ -111,6 +111,9 @@ impl DataDirs {
     pub fn daemon_lock(&self) -> PathBuf {
         self.data.join("daemon.lock")
     }
+    pub fn daemon_log(&self) -> PathBuf {
+        self.logs.join("daemon.log")
+    }
     pub fn service_log(&self, id: &str) -> PathBuf {
         self.service_logs.join(format!("{id}.log"))
     }

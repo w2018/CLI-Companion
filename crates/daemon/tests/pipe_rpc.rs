@@ -249,6 +249,22 @@ async fn 管道rpc全链路与服务生命周期() {
     assert_eq!(ev["topic"], json!("config.changed"));
     assert!(ev["ts"].as_str().is_some());
 
+    // ===== 11. 守护进程日志（daemon.logs / daemon.logs.clear）=====
+    let logs = rpc_call(Method::DaemonLogs, Some(json!({"tail": 10})))
+        .await
+        .expect("daemon.logs 应成功");
+    assert!(logs["lines"].is_array());
+    assert!(logs["total"].is_u64());
+    let cleared = rpc_call(Method::DaemonLogsClear, None)
+        .await
+        .expect("daemon.logs.clear 应成功");
+    assert_eq!(cleared["ok"], json!(true));
+    // 清空后再读应为 0 行
+    let after = rpc_call(Method::DaemonLogs, None)
+        .await
+        .expect("清空后再读应成功");
+    assert_eq!(after["total"], json!(0));
+
     // ===== 清理 =====
     let _ = std::fs::remove_dir_all(&state.dirs.root);
 }

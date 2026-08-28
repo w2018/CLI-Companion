@@ -4,6 +4,7 @@ import { App } from "../App";
 import { Dashboard } from "../features/dashboard/Dashboard";
 import { ServiceList } from "../features/services/ServiceList";
 import { LogViewer } from "../features/logs/LogViewer";
+import { DaemonLogPage } from "../features/logs/DaemonLogPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { AboutPage } from "../features/about/AboutPage";
 
@@ -15,6 +16,7 @@ export const router = createBrowserRouter([
       { index: true, element: <Dashboard /> },
       { path: "services", element: <ServiceList /> },
       { path: "logs/:serviceId", element: <LogViewer /> },
+      { path: "daemon-log", element: <DaemonLogPage /> },
       { path: "settings", element: <SettingsPage /> },
       { path: "about", element: <AboutPage /> },
     ],

@@ -23,6 +23,8 @@ export type MethodName =
   | "service.logs"
   | "service.logs.clear"
   | "daemon.shutdown"
+  | "daemon.logs"
+  | "daemon.logs.clear"
   | "sync.status"
   | "sync.run_now"
   | "sync.test"

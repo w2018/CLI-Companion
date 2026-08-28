@@ -13,6 +13,29 @@ use tokio::net::windows::named_pipe::ServerOptions;
 /// daemon 关闭前给 GUI 响应的缓冲时间
 const SHUTDOWN_GRACE_MS: u64 = 200;
 
+/// 探测是否已有健康的 daemon 正在服务（管道 ping 可达）
+///
+/// 用于新实例启动时区分两种情况：
+/// - 管道可达 → 已有实例在正常服务，本实例应立即退出，不留多余进程；
+/// - 管道不可达（旧实例退出中）→ 等待其释放单例锁后接管。
+pub async fn existing_daemon_alive() -> bool {
+    use tokio::net::windows::named_pipe::ClientOptions;
+    let mut pipe = match ClientOptions::new().open(PIPE_NAME) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    let req = Request::new(1, method::Method::SystemPing, None);
+    if codec::write_frame(&mut pipe, &req).await.is_err() {
+        return false;
+    }
+    let read = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        codec::read_frame::<Response, _>(&mut pipe),
+    )
+    .await;
+    matches!(read, Ok(Ok(_)))
+}
+
 /// 命名管道服务端主循环
 pub async fn run_pipe_server(state: AppState) -> std::io::Result<()> {
     run_pipe_server_on(state, PIPE_NAME).await
@@ -369,6 +392,30 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
         }
 
         // ===== daemon =====
+        M::DaemonLogs => {
+            let tail = params
+                .get("tail")
+                .and_then(Value::as_u64)
+                .unwrap_or(200)
+                .min(5000) as usize;
+            let path = state.dirs.daemon_log();
+            let content = std::fs::read_to_string(&path).unwrap_or_default();
+            let lines: Vec<&str> = content.lines().collect();
+            let start = lines.len().saturating_sub(tail);
+            Ok(json!({"lines": &lines[start..], "total": lines.len()}))
+        }
+        // 清空 daemon.log（tracing appender 以 append 模式持有句柄，截断后继续追加到文件尾）
+        M::DaemonLogsClear => {
+            let path = state.dirs.daemon_log();
+            match std::fs::write(&path, "") {
+                Ok(()) => Ok(json!({"ok": true})),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(json!({"ok": true})),
+                Err(e) => Err(RpcError::new(
+                    error::ErrorCode::Internal,
+                    format!("清空 daemon 日志失败: {e}"),
+                )),
+            }
+        }
         M::DaemonShutdown => {
             let stop_services = params
                 .get("stop_services")
