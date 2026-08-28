@@ -128,9 +128,8 @@ pub async fn bootstrap(
             Err(e) => return Err(e.into()),
         }
     }
-    let _lock = lock.ok_or_else(|| {
-        anyhow::anyhow!("等待 15 秒后旧 daemon 实例仍未退出，本实例放弃启动")
-    })?;
+    let _lock =
+        lock.ok_or_else(|| anyhow::anyhow!("等待 15 秒后旧 daemon 实例仍未退出，本实例放弃启动"))?;
     tracing::info!(root = %dirs.root.display(), "daemon 启动");
 
     // 3. 加载配置（损坏时备份为 .corrupt 并使用默认配置）
@@ -145,7 +144,11 @@ pub async fn bootstrap(
     let state = AppState {
         as_service,
         manager: Arc::new(ServiceManager::new(dirs.clone())),
-        config: Arc::new(AsyncMutex::new(ConfigStore { services, app, secrets })),
+        config: Arc::new(AsyncMutex::new(ConfigStore {
+            services,
+            app,
+            secrets,
+        })),
         sync: Arc::new(SyncEngine::new()),
         shutdown: Arc::new(tokio::sync::Notify::new()),
         dirs,
@@ -205,6 +208,10 @@ fn load_services_with_recovery(dirs: &DataDirs) -> ServicesConfig {
 
 /// 状态健康检查工具：判断给定运行时状态集合中是否有活跃服务
 #[allow(dead_code)] // 供集成测试使用
-pub fn has_running(runtimes: &std::collections::HashMap<cli_companion_domain::ServiceId, ServiceStatus>) -> bool {
-    runtimes.values().any(|s| matches!(s, ServiceStatus::Running | ServiceStatus::Starting))
+pub fn has_running(
+    runtimes: &std::collections::HashMap<cli_companion_domain::ServiceId, ServiceStatus>,
+) -> bool {
+    runtimes
+        .values()
+        .any(|s| matches!(s, ServiceStatus::Running | ServiceStatus::Starting))
 }

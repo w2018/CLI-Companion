@@ -25,7 +25,9 @@ fn test_state(tag: &str) -> AppState {
     ));
     AppState {
         as_service: false,
-        manager: Arc::new(cli_companion_daemon::manager::ServiceManager::new(dirs.clone())),
+        manager: Arc::new(cli_companion_daemon::manager::ServiceManager::new(
+            dirs.clone(),
+        )),
         config: Arc::new(AsyncMutex::new(cli_companion_daemon::state::ConfigStore {
             services: cli_companion_domain::ServicesConfig::default(),
             app: cli_companion_daemon::app_config::AppConfig::default(),
@@ -38,13 +40,20 @@ fn test_state(tag: &str) -> AppState {
 }
 
 /// 测试专用 RPC 客户端：连接管道 → 请求 → 响应
-async fn rpc_call(method: Method, params: Option<serde_json::Value>) -> Result<serde_json::Value, cli_companion_protocol::RpcError> {
+async fn rpc_call(
+    method: Method,
+    params: Option<serde_json::Value>,
+) -> Result<serde_json::Value, cli_companion_protocol::RpcError> {
     use cli_companion_protocol::error::ErrorCode;
-    let mut pipe = ClientOptions::new()
-        .open(PIPE_NAME)
-        .map_err(|_| cli_companion_protocol::RpcError::new(ErrorCode::DaemonUnavailable, "daemon 不可达"))?;
+    let mut pipe = ClientOptions::new().open(PIPE_NAME).map_err(|_| {
+        cli_companion_protocol::RpcError::new(ErrorCode::DaemonUnavailable, "daemon 不可达")
+    })?;
     static ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(10000);
-    let req = Request::new(ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed), method, params);
+    let req = Request::new(
+        ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        method,
+        params,
+    );
     codec::write_frame(&mut pipe, &req).await?;
     let resp: Response = codec::read_frame(&mut pipe).await?;
     resp.into_result()
@@ -64,7 +73,10 @@ async fn wait_pipe_ready() {
 
 /// 生成一个长驻测试服务定义（ping 本地回环，无控制台窗口）
 fn sleeper_service(name: &str, seconds: u32) -> ServiceDefinition {
-    let mut svc = ServiceDefinition::new(name, std::path::PathBuf::from("C:\\Windows\\System32\\PING.EXE"));
+    let mut svc = ServiceDefinition::new(
+        name,
+        std::path::PathBuf::from("C:\\Windows\\System32\\PING.EXE"),
+    );
     svc.args = vec![
         cli_companion_domain::Arg {
             id: "a1".into(),
@@ -104,12 +116,16 @@ async fn 管道rpc全链路与服务生命周期() {
     wait_pipe_ready().await;
 
     // ===== 1. system.ping =====
-    let pong = rpc_call(Method::SystemPing, None).await.expect("ping 应成功");
+    let pong = rpc_call(Method::SystemPing, None)
+        .await
+        .expect("ping 应成功");
     assert_eq!(pong["ok"], json!(true));
     assert!(pong["daemon_version"].as_str().is_some());
 
     // ===== 2. system.info =====
-    let info = rpc_call(Method::SystemInfo, None).await.expect("info 应成功");
+    let info = rpc_call(Method::SystemInfo, None)
+        .await
+        .expect("info 应成功");
     assert_eq!(info["running_as_service"], json!(false));
 
     // ===== 3. service.create =====
@@ -139,7 +155,9 @@ async fn 管道rpc全链路与服务生命周期() {
     }
     assert!(running, "服务应进入 running 状态");
     let list = rpc_call(Method::ServiceList, None).await.unwrap();
-    let pid = list["services"][0]["runtime"]["pid"].as_u64().expect("应有 pid");
+    let pid = list["services"][0]["runtime"]["pid"]
+        .as_u64()
+        .expect("应有 pid");
 
     // ===== 5. service.logs（ping 会输出，应有内容）=====
     tokio::time::sleep(Duration::from_millis(1500)).await;
@@ -173,7 +191,11 @@ async fn 管道rpc全链路与服务生命周期() {
         .await
         .expect("删除服务应成功");
     let list = rpc_call(Method::ServiceList, None).await.unwrap();
-    assert_eq!(list["services"].as_array().unwrap().len(), 0, "删除后列表应为空");
+    assert_eq!(
+        list["services"].as_array().unwrap().len(),
+        0,
+        "删除后列表应为空"
+    );
 
     // ===== 8. config.get 往返 =====
     let cfg = rpc_call(Method::ConfigGet, None).await.unwrap();

@@ -1,4 +1,4 @@
-﻿//! ServiceManager：actor 表的统一入口（RPC 层只与本模块交互）
+//! ServiceManager：actor 表的统一入口（RPC 层只与本模块交互）
 
 use crate::actor::{spawn_actor, ActorCmd, ActorHandle, ActorMap, SharedState};
 use crate::dirs::DataDirs;
@@ -14,13 +14,18 @@ pub struct ServiceManager {
 
 impl ServiceManager {
     pub fn new(dirs: DataDirs) -> Self {
-        Self { actors: Mutex::new(HashMap::new()), dirs }
+        Self {
+            actors: Mutex::new(HashMap::new()),
+            dirs,
+        }
     }
 
     /// 获取或创建 actor（幂等）
     pub fn ensure_actor(&self, id: ServiceId) -> ActorHandle {
         let mut map = self.actors.lock().unwrap();
-        map.entry(id).or_insert_with(|| spawn_actor(id, self.dirs.clone())).clone()
+        map.entry(id)
+            .or_insert_with(|| spawn_actor(id, self.dirs.clone()))
+            .clone()
     }
 
     /// 移除 actor（关闭邮箱；残留子进程由 KILL_ON_JOB_CLOSE 兜底）
@@ -35,7 +40,10 @@ impl ServiceManager {
         let (tx, rx) = oneshot::channel();
         handle
             .tx
-            .send(ActorCmd::Start { def: Box::new(def.clone()), reply: tx })
+            .send(ActorCmd::Start {
+                def: Box::new(def.clone()),
+                reply: tx,
+            })
             .await
             .map_err(|_| "actor 已退出".to_string())?;
         rx.await.map_err(|_| "actor 未响应".to_string())?
@@ -47,8 +55,7 @@ impl ServiceManager {
         match handle {
             Some(h) => {
                 let (tx, rx) = oneshot::channel();
-                h.tx
-                    .send(ActorCmd::Stop { reply: tx })
+                h.tx.send(ActorCmd::Stop { reply: tx })
                     .await
                     .map_err(|_| "actor 已退出".to_string())?;
                 rx.await.map_err(|_| "actor 未响应".to_string())?
@@ -63,7 +70,10 @@ impl ServiceManager {
         let (tx, rx) = oneshot::channel();
         handle
             .tx
-            .send(ActorCmd::Restart { def: Box::new(def.clone()), reply: tx })
+            .send(ActorCmd::Restart {
+                def: Box::new(def.clone()),
+                reply: tx,
+            })
             .await
             .map_err(|_| "actor 已退出".to_string())?;
         rx.await.map_err(|_| "actor 未响应".to_string())?
@@ -73,7 +83,8 @@ impl ServiceManager {
     #[allow(dead_code)] // 供集成测试使用
     pub fn runtime_of(&self, id: &ServiceId) -> Option<RuntimeState> {
         let map = self.actors.lock().unwrap();
-        map.get(id).and_then(|h| h.state.lock().ok().map(|s| s.clone()))
+        map.get(id)
+            .and_then(|h| h.state.lock().ok().map(|s| s.clone()))
     }
 
     /// 全部运行时状态
@@ -113,11 +124,7 @@ impl ServiceManager {
                 .or_insert_with(|| spawn_actor(*id, self.dirs.clone()));
         }
         // 移除已删除的服务 actor
-        let to_remove: Vec<ServiceId> = map
-            .keys()
-            .filter(|k| !ids.contains(k))
-            .copied()
-            .collect();
+        let to_remove: Vec<ServiceId> = map.keys().filter(|k| !ids.contains(k)).copied().collect();
         for id in to_remove {
             map.remove(&id);
         }

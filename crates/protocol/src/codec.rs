@@ -75,7 +75,9 @@ mod tests {
 
     #[tokio::test]
     async fn 帧编解码往返() {
-        let msg = Msg { text: "你好，CLI Companion".into() };
+        let msg = Msg {
+            text: "你好，CLI Companion".into(),
+        };
         let mut buf = encode_frame(&msg).unwrap();
         // 模拟流读取
         let mut cursor = std::io::Cursor::new(buf.clone());

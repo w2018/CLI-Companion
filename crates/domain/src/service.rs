@@ -103,16 +103,11 @@ pub struct EnvVar {
 }
 
 /// 运行身份（V1 仅支持当前用户）；序列化为 {"kind":"current_user"}
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RunAs {
+    #[default]
     CurrentUser,
-}
-
-impl Default for RunAs {
-    fn default() -> Self {
-        RunAs::CurrentUser
-    }
 }
 
 /// 控制台配置：窗口语义由 mode + startup 组合表达（开发文档 §1.3）
@@ -125,7 +120,10 @@ pub struct ConsoleConfig {
 
 impl Default for ConsoleConfig {
     fn default() -> Self {
-        Self { mode: ConsoleMode::NewConsoleVisible, startup: WindowStartup::Normal }
+        Self {
+            mode: ConsoleMode::NewConsoleVisible,
+            startup: WindowStartup::Normal,
+        }
     }
 }
 
@@ -164,7 +162,11 @@ impl Default for StopConfig {
         // 优雅停止默认 1.5 秒：Windows 上 taskkill（WM_CLOSE）对控制台程序
         // 基本无效，久等无意义；超时后立即 Job Object 强杀进程树，
         // 保证"停止很快"。需要更长优雅期的服务可单独配置。
-        Self { signal: StopSignal::CtrlC, graceful_timeout_ms: 1_500, kill_timeout_ms: 10_000 }
+        Self {
+            signal: StopSignal::CtrlC,
+            graceful_timeout_ms: 1_500,
+            kill_timeout_ms: 10_000,
+        }
     }
 }
 
@@ -250,7 +252,11 @@ pub struct Backoff {
 
 impl Default for Backoff {
     fn default() -> Self {
-        Self { initial_ms: 2_000, max_ms: 300_000, multiplier: 2 }
+        Self {
+            initial_ms: 2_000,
+            max_ms: 300_000,
+            multiplier: 2,
+        }
     }
 }
 

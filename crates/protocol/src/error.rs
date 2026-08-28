@@ -53,7 +53,11 @@ pub struct RpcError {
 impl RpcError {
     /// 快捷构造：带格式化消息的错误
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
-        Self { code, message: message.into(), data: None }
+        Self {
+            code,
+            message: message.into(),
+            data: None,
+        }
     }
 
     /// 附加 data 字段

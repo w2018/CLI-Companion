@@ -25,9 +25,17 @@ pub type SharedState = Arc<Mutex<RuntimeState>>;
 
 /// 发送给 actor 的命令
 pub enum ActorCmd {
-    Start { def: Box<ServiceDefinition>, reply: oneshot::Sender<Result<(), String>> },
-    Stop { reply: oneshot::Sender<Result<(), String>> },
-    Restart { def: Box<ServiceDefinition>, reply: oneshot::Sender<Result<(), String>> },
+    Start {
+        def: Box<ServiceDefinition>,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    Stop {
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    Restart {
+        def: Box<ServiceDefinition>,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
 }
 
 /// actor 句柄：manager 持有，用于发命令和读状态
@@ -116,14 +124,12 @@ impl Actor {
                             let code = status.code().unwrap_or(-1);
                             tracing::warn!(service = %self.id, "服务意外退出，退出码 {code}");
                             self.on_exit(code);
-                            // 按策略尝试自动重启
+                            // 按策略尝试自动重启（熔断器 + 退避等待均满足才启动）
                             if let Some(def) = self.current_def.clone() {
-                                if self.should_auto_restart(&def) {
-                                    if self.wait_backoff(&def).await {
-                                        tracing::info!(service = %self.id, "自动重启服务");
-                                        if let Err(e) = self.start(&def).await {
-                                            tracing::error!(service = %self.id, "重启失败: {e}");
-                                        }
+                                if self.should_auto_restart(&def) && self.wait_backoff(&def).await {
+                                    tracing::info!(service = %self.id, "自动重启服务");
+                                    if let Err(e) = self.start(&def).await {
+                                        tracing::error!(service = %self.id, "重启失败: {e}");
                                     }
                                 }
                             }
@@ -324,7 +330,11 @@ impl Actor {
 
     /// 退避等待（可被 Stop 命令打断）
     async fn wait_backoff(&mut self, def: &ServiceDefinition) -> bool {
-        let Backoff { initial_ms, max_ms, multiplier } = def.restart.backoff;
+        let Backoff {
+            initial_ms,
+            max_ms,
+            multiplier,
+        } = def.restart.backoff;
         let n = self.restart_times.len() as u32;
         let delay = initial_ms
             .saturating_mul((multiplier as u64).saturating_pow(n.min(10)))
@@ -351,7 +361,11 @@ impl Actor {
 }
 
 /// 把子进程输出线程写入日志文件（轮转：>10MB 时更名为 .old）
-fn spawn_log_thread(stream: impl std::io::Read + Send + 'static, log_path: PathBuf, label: &'static str) {
+fn spawn_log_thread(
+    stream: impl std::io::Read + Send + 'static,
+    log_path: PathBuf,
+    label: &'static str,
+) {
     std::thread::spawn(move || {
         use std::io::{BufRead, BufReader, Write};
         let reader = BufReader::new(stream);

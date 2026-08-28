@@ -24,7 +24,12 @@ pub struct Request {
 impl Request {
     /// 构造请求
     pub fn new(id: RequestId, method: Method, params: Option<serde_json::Value>) -> Self {
-        Self { jsonrpc: "2.0".into(), id, method, params }
+        Self {
+            jsonrpc: "2.0".into(),
+            id,
+            method,
+            params,
+        }
     }
 }
 
@@ -46,12 +51,22 @@ pub struct Response {
 impl Response {
     /// 成功响应
     pub fn ok(id: RequestId, result: serde_json::Value) -> Self {
-        Self { jsonrpc: "2.0".into(), id, result: Some(result), error: None }
+        Self {
+            jsonrpc: "2.0".into(),
+            id,
+            result: Some(result),
+            error: None,
+        }
     }
 
     /// 错误响应
     pub fn err(id: RequestId, error: RpcError) -> Self {
-        Self { jsonrpc: "2.0".into(), id, result: None, error: Some(error) }
+        Self {
+            jsonrpc: "2.0".into(),
+            id,
+            result: None,
+            error: Some(error),
+        }
     }
 
     /// 取出结果或错误：成功返回 Ok(result)，失败返回 Err(RpcError)
@@ -80,7 +95,8 @@ mod tests {
         assert_eq!(back.method, Method::SystemPing);
 
         let resp = Response::ok(1, serde_json::json!({"ok": true}));
-        let parsed: Response = serde_json::from_str(&serde_json::to_string(&resp).unwrap()).unwrap();
+        let parsed: Response =
+            serde_json::from_str(&serde_json::to_string(&resp).unwrap()).unwrap();
         assert!(parsed.into_result().is_ok());
 
         let err_resp = Response::err(2, RpcError::new(ErrorCode::NotFound, "无此服务"));

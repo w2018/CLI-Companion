@@ -12,14 +12,14 @@ pub async fn daemon_rpc(
 ) -> Result<serde_json::Value, String> {
     // 方法名 → 枚举（未知方法直接拒绝，fail closed）
     let method_value = serde_json::Value::String(method);
-    let method: cli_companion_protocol::Method = serde_json::from_value(method_value)
-        .map_err(|e| format!("未知或非法的方法名: {e}"))?;
+    let method: cli_companion_protocol::Method =
+        serde_json::from_value(method_value).map_err(|e| format!("未知或非法的方法名: {e}"))?;
 
     match DaemonConnection::call(method, params).await {
         Ok(v) => Ok(v),
         Err(e) => {
             tracing::warn!("RPC 失败: {e}");
-            Err(serde_json::to_string(&e).unwrap_or_else(|_| e.message))
+            Err(serde_json::to_string(&e).unwrap_or(e.message))
         }
     }
 }

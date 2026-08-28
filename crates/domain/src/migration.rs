@@ -36,7 +36,10 @@ mod tests {
 
     #[test]
     fn 不允许降级() {
-        let cfg = ServicesConfig { version: 2, services: vec![] };
+        let cfg = ServicesConfig {
+            version: 2,
+            services: vec![],
+        };
         let err = migrate_to_current(cfg).unwrap_err();
         assert!(matches!(err, ConfigError::VersionTooNew { found: 2, .. }));
     }

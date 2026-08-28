@@ -26,15 +26,22 @@ const DETACHED_PROCESS: u32 = 0x0000_0008;
 /// 将控制台配置映射为进程创建标志
 pub fn creation_flags(console: &ConsoleConfig) -> ConsoleFlags {
     let (flag, show) = match (console.mode, console.startup) {
-        (ConsoleMode::NewConsoleVisible, WindowStartup::Normal) => (CREATE_NEW_CONSOLE, SW_SHOWNORMAL),
-        (ConsoleMode::NewConsoleVisible, WindowStartup::Minimized) => (CREATE_NEW_CONSOLE, SW_SHOWMINNOACTIVE),
+        (ConsoleMode::NewConsoleVisible, WindowStartup::Normal) => {
+            (CREATE_NEW_CONSOLE, SW_SHOWNORMAL)
+        }
+        (ConsoleMode::NewConsoleVisible, WindowStartup::Minimized) => {
+            (CREATE_NEW_CONSOLE, SW_SHOWMINNOACTIVE)
+        }
         (ConsoleMode::NewConsoleVisible, WindowStartup::Hidden) => (CREATE_NEW_CONSOLE, SW_HIDE),
         // 隐藏新控制台：无窗口
         (ConsoleMode::NewConsoleHidden, _) => (CREATE_NO_WINDOW, SW_HIDE),
         // 完全脱离控制台
         (ConsoleMode::NoConsole, _) => (DETACHED_PROCESS, SW_HIDE),
     };
-    ConsoleFlags { creation_flags: flag, show_window: show }
+    ConsoleFlags {
+        creation_flags: flag,
+        show_window: show,
+    }
 }
 
 #[cfg(test)]

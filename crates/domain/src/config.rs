@@ -18,7 +18,10 @@ pub struct ServicesConfig {
 
 impl Default for ServicesConfig {
     fn default() -> Self {
-        Self { version: crate::SCHEMA_VERSION, services: Vec::new() }
+        Self {
+            version: crate::SCHEMA_VERSION,
+            services: Vec::new(),
+        }
     }
 }
 
@@ -38,7 +41,10 @@ impl fmt::Display for ConfigError {
         match self {
             ConfigError::Parse(e) => write!(f, "配置 JSON 解析失败: {e}"),
             ConfigError::VersionTooNew { found, supported } => {
-                write!(f, "配置版本 {found} 高于当前支持的 {supported}，禁止自动降级")
+                write!(
+                    f,
+                    "配置版本 {found} 高于当前支持的 {supported}，禁止自动降级"
+                )
             }
             ConfigError::Validation(msg) => write!(f, "配置校验失败: {msg}"),
         }
@@ -50,8 +56,7 @@ impl std::error::Error for ConfigError {}
 impl ServicesConfig {
     /// 从 JSON 解析并迁移到当前版本（未知字段拒绝）
     pub fn from_json(raw: &str) -> Result<Self, ConfigError> {
-        let cfg: ServicesConfig =
-            serde_json::from_str(raw).map_err(ConfigError::Parse)?;
+        let cfg: ServicesConfig = serde_json::from_str(raw).map_err(ConfigError::Parse)?;
         crate::migration::migrate_to_current(cfg)
     }
 
@@ -73,7 +78,10 @@ impl ServicesConfig {
                 return Err(ConfigError::Validation(format!("服务 {} 名称为空", svc.id)));
             }
             if svc.exe.as_os_str().is_empty() {
-                return Err(ConfigError::Validation(format!("服务 {} 未配置 exe", svc.id)));
+                return Err(ConfigError::Validation(format!(
+                    "服务 {} 未配置 exe",
+                    svc.id
+                )));
             }
             if !seen.insert(&svc.name) {
                 return Err(ConfigError::Validation(format!("服务名重复: {}", svc.name)));

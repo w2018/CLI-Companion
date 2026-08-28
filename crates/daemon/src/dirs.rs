@@ -59,7 +59,14 @@ impl DataDirs {
         for dir in [&config, &data, &logs, &cache, &service_logs] {
             let _ = std::fs::create_dir_all(dir);
         }
-        Self { root, config, data, logs, cache, service_logs }
+        Self {
+            root,
+            config,
+            data,
+            logs,
+            cache,
+            service_logs,
+        }
     }
 
     pub fn services_json(&self) -> PathBuf {

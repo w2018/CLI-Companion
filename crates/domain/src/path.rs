@@ -33,14 +33,20 @@ pub fn resolve_path(raw: &str, base_dir: Option<&Path>) -> PathResolution {
         let joined = base.join(&p);
         return mark(&expanded, joined.exists());
     }
-    PathResolution::Unresolved { raw: raw.to_string(), reason: "无基准目录可解析相对路径".into() }
+    PathResolution::Unresolved {
+        raw: raw.to_string(),
+        reason: "无基准目录可解析相对路径".into(),
+    }
 }
 
 fn mark(expanded: &str, exists: bool) -> PathResolution {
     if exists {
         PathResolution::Resolved(PathBuf::from(expanded))
     } else {
-        PathResolution::Unresolved { raw: expanded.to_string(), reason: "路径不存在".into() }
+        PathResolution::Unresolved {
+            raw: expanded.to_string(),
+            reason: "路径不存在".into(),
+        }
     }
 }
 

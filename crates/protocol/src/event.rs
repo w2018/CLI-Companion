@@ -47,7 +47,12 @@ impl Event {
         payload: serde_json::Value,
         ts: String,
     ) -> Self {
-        Self { topic, service_id, payload, ts }
+        Self {
+            topic,
+            service_id,
+            payload,
+            ts,
+        }
     }
 }
 
@@ -58,7 +63,10 @@ mod tests {
     #[test]
     fn 事件主题序列化格式() {
         let s = serde_json::to_value(EventTopic::ServiceRestartAttempt).unwrap();
-        assert_eq!(s, serde_json::Value::String("service.restart_attempt".into()));
+        assert_eq!(
+            s,
+            serde_json::Value::String("service.restart_attempt".into())
+        );
         let back: EventTopic = serde_json::from_value(s).unwrap();
         assert_eq!(back, EventTopic::ServiceRestartAttempt);
     }

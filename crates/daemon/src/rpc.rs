@@ -76,15 +76,13 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
         })
         .map_err(|e| internal(e.to_string())),
 
-        M::SystemInfo => {
-            serde_json::to_value(InfoResult {
-                daemon_version: env!("CARGO_PKG_VERSION").into(),
-                schema_version: cli_companion_domain::SCHEMA_VERSION,
-                data_dir: state.dirs.root.display().to_string(),
-                running_as_service: state.as_service,
-            })
-            .map_err(|e| internal(e.to_string()))
-        }
+        M::SystemInfo => serde_json::to_value(InfoResult {
+            daemon_version: env!("CARGO_PKG_VERSION").into(),
+            schema_version: cli_companion_domain::SCHEMA_VERSION,
+            data_dir: state.dirs.root.display().to_string(),
+            running_as_service: state.as_service,
+        })
+        .map_err(|e| internal(e.to_string())),
 
         // ===== 配置 =====
         M::ConfigGet => {
@@ -98,13 +96,19 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
         M::ConfigUpdate => {
             // 支持部分更新：{services?: {...}, app?: {...}, webdav_password?: "..."}
             if let Some(v) = params.get("services") {
-                let cfg: ServicesConfig = serde_json::from_value(v.clone())
-                    .map_err(|e| RpcError::new(error::ErrorCode::Validation, format!("services 配置无效: {e}")))?;
+                let cfg: ServicesConfig = serde_json::from_value(v.clone()).map_err(|e| {
+                    RpcError::new(
+                        error::ErrorCode::Validation,
+                        format!("services 配置无效: {e}"),
+                    )
+                })?;
                 state.save_services(cfg).await.map_err(validation)?;
             }
             if let Some(v) = params.get("app") {
-                let app: crate::app_config::AppConfig = serde_json::from_value(v.clone())
-                    .map_err(|e| RpcError::new(error::ErrorCode::Validation, format!("app 配置无效: {e}")))?;
+                let app: crate::app_config::AppConfig =
+                    serde_json::from_value(v.clone()).map_err(|e| {
+                        RpcError::new(error::ErrorCode::Validation, format!("app 配置无效: {e}"))
+                    })?;
                 state.save_app(app).await.map_err(validation)?;
             }
             // WebDAV 密码单独提交（DPAPI 加密存 secrets.json，不进 app.json）
@@ -140,7 +144,10 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
             // 名称唯一性
             let mut cfg = state.services().await;
             if cfg.services.iter().any(|s| s.name == svc.name) {
-                return Err(RpcError::new(error::ErrorCode::Conflict, format!("服务名已存在: {}", svc.name)));
+                return Err(RpcError::new(
+                    error::ErrorCode::Conflict,
+                    format!("服务名已存在: {}", svc.name),
+                ));
             }
             cfg.services.push(svc.clone());
             state.save_services(cfg).await.map_err(validation)?;
@@ -154,10 +161,22 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
                 .services
                 .iter()
                 .position(|s| s.id == svc.id)
-                .ok_or_else(|| RpcError::new(error::ErrorCode::NotFound, format!("服务不存在: {}", svc.id)))?;
+                .ok_or_else(|| {
+                    RpcError::new(
+                        error::ErrorCode::NotFound,
+                        format!("服务不存在: {}", svc.id),
+                    )
+                })?;
             // 名称不与他人冲突
-            if cfg.services.iter().any(|s| s.id != svc.id && s.name == svc.name) {
-                return Err(RpcError::new(error::ErrorCode::Conflict, format!("服务名已存在: {}", svc.name)));
+            if cfg
+                .services
+                .iter()
+                .any(|s| s.id != svc.id && s.name == svc.name)
+            {
+                return Err(RpcError::new(
+                    error::ErrorCode::Conflict,
+                    format!("服务名已存在: {}", svc.name),
+                ));
             }
             cfg.services[pos] = svc.clone();
             state.save_services(cfg).await.map_err(validation)?;
@@ -181,13 +200,14 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
         M::ServiceStart => {
             let id = parse_id(&params)?;
             let cfg = state.services().await;
-            let svc = cfg
-                .find(&id)
-                .cloned()
-                .ok_or_else(|| RpcError::new(error::ErrorCode::NotFound, format!("服务不存在: {id}")))?;
-            state.manager.start(&svc).await.map_err(|e| {
-                RpcError::new(error::ErrorCode::ProcessSpawnFailed, e)
+            let svc = cfg.find(&id).cloned().ok_or_else(|| {
+                RpcError::new(error::ErrorCode::NotFound, format!("服务不存在: {id}"))
             })?;
+            state
+                .manager
+                .start(&svc)
+                .await
+                .map_err(|e| RpcError::new(error::ErrorCode::ProcessSpawnFailed, e))?;
             Ok(json!({"ok": true}))
         }
 
@@ -200,19 +220,24 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
         M::ServiceRestart => {
             let id = parse_id(&params)?;
             let cfg = state.services().await;
-            let svc = cfg
-                .find(&id)
-                .cloned()
-                .ok_or_else(|| RpcError::new(error::ErrorCode::NotFound, format!("服务不存在: {id}")))?;
-            state.manager.restart(&svc).await.map_err(|e| {
-                RpcError::new(error::ErrorCode::ProcessSpawnFailed, e)
+            let svc = cfg.find(&id).cloned().ok_or_else(|| {
+                RpcError::new(error::ErrorCode::NotFound, format!("服务不存在: {id}"))
             })?;
+            state
+                .manager
+                .restart(&svc)
+                .await
+                .map_err(|e| RpcError::new(error::ErrorCode::ProcessSpawnFailed, e))?;
             Ok(json!({"ok": true}))
         }
 
         M::ServiceLogs => {
             let id = parse_id(&params)?;
-            let tail = params.get("tail").and_then(Value::as_u64).unwrap_or(200).min(5000) as usize;
+            let tail = params
+                .get("tail")
+                .and_then(Value::as_u64)
+                .unwrap_or(200)
+                .min(5000) as usize;
             let path = state.dirs.service_log(&id.to_string());
             let content = std::fs::read_to_string(&path).unwrap_or_default();
             let lines: Vec<&str> = content.lines().collect();
@@ -303,8 +328,12 @@ fn parse_id(params: &Value) -> Result<uuid::Uuid, RpcError> {
         .get("service_id")
         .and_then(Value::as_str)
         .ok_or_else(|| RpcError::new(error::ErrorCode::Validation, "缺少 service_id"))?;
-    uuid::Uuid::parse_str(s)
-        .map_err(|e| RpcError::new(error::ErrorCode::Validation, format!("service_id 无效: {e}")))
+    uuid::Uuid::parse_str(s).map_err(|e| {
+        RpcError::new(
+            error::ErrorCode::Validation,
+            format!("service_id 无效: {e}"),
+        )
+    })
 }
 
 fn validation(msg: String) -> RpcError {

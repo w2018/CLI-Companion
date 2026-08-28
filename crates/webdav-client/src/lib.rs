@@ -78,7 +78,12 @@ impl WebdavClient {
     ///
     /// 自动补齐尾随斜杠：Url::join 在 base 无尾斜杠时会替换最后一段路径，
     /// 导致所有请求 404（坚果云等服务的常见坑）。
-    pub fn new(base: &str, username: String, password: String, verify_tls: bool) -> Result<Self, WebdavError> {
+    pub fn new(
+        base: &str,
+        username: String,
+        password: String,
+        verify_tls: bool,
+    ) -> Result<Self, WebdavError> {
         let trimmed = base.trim();
         let normalized = if trimmed.ends_with('/') {
             trimmed.to_string()
@@ -92,11 +97,18 @@ impl WebdavClient {
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(60))
             .build()?;
-        Ok(Self { client, base, username, password })
+        Ok(Self {
+            client,
+            base,
+            username,
+            password,
+        })
     }
 
     fn url_for(&self, path: &str) -> Result<Url, WebdavError> {
-        self.base.join(path.trim_start_matches('/')).map_err(|_| WebdavError::InvalidUrl(path.into()))
+        self.base
+            .join(path.trim_start_matches('/'))
+            .map_err(|_| WebdavError::InvalidUrl(path.into()))
     }
 
     fn auth(&self) -> Option<reqwest::header::HeaderValue> {
@@ -110,14 +122,27 @@ impl WebdavClient {
                 let mut b64 = String::new();
                 // 手写 base64（标准字母表），避免引入额外依赖
                 let bytes = cred.as_bytes();
-                const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+                const TABLE: &[u8] =
+                    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
                 for chunk in bytes.chunks(3) {
-                    let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+                    let b = [
+                        chunk[0],
+                        *chunk.get(1).unwrap_or(&0),
+                        *chunk.get(2).unwrap_or(&0),
+                    ];
                     let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
                     b64.push(TABLE[(n >> 18) as usize & 63] as char);
                     b64.push(TABLE[(n >> 12) as usize & 63] as char);
-                    b64.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
-                    b64.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+                    b64.push(if chunk.len() > 1 {
+                        TABLE[(n >> 6) as usize & 63] as char
+                    } else {
+                        '='
+                    });
+                    b64.push(if chunk.len() > 2 {
+                        TABLE[n as usize & 63] as char
+                    } else {
+                        '='
+                    });
                 }
                 let _ = std::io::sink().write_all(b"");
                 reqwest::header::HeaderValue::from_str(&format!("Basic {b64}"))
@@ -135,7 +160,10 @@ impl WebdavClient {
         let url = self.url_for(path)?;
         let req = self
             .client
-            .request(reqwest::Method::from_bytes(b"PROPFIND").unwrap(), url.clone())
+            .request(
+                reqwest::Method::from_bytes(b"PROPFIND").unwrap(),
+                url.clone(),
+            )
             .header("Depth", "0")
             .header(reqwest::header::CONTENT_TYPE, "application/xml");
         let req = match self.auth() {
@@ -157,12 +185,22 @@ impl WebdavClient {
                     .map(String::from);
                 let body = resp.text().await.unwrap_or_default();
                 let etag = header_etag.or_else(|| extract_etag_from_xml(&body));
-                Ok(Some(RemoteFile { etag, last_modified: None, size: None }))
+                Ok(Some(RemoteFile {
+                    etag,
+                    last_modified: None,
+                    size: None,
+                }))
             }
             StatusCode::NOT_FOUND => Ok(None),
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(WebdavError::Auth),
-            s if s.is_server_error() => Err(WebdavError::Server { status: s.as_u16(), url: url.to_string() }),
-            s => Err(WebdavError::Server { status: s.as_u16(), url: url.to_string() }),
+            s if s.is_server_error() => Err(WebdavError::Server {
+                status: s.as_u16(),
+                url: url.to_string(),
+            }),
+            s => Err(WebdavError::Server {
+                status: s.as_u16(),
+                url: url.to_string(),
+            }),
         }
     }
 
@@ -181,7 +219,10 @@ impl WebdavClient {
             StatusCode::CREATED | StatusCode::OK | StatusCode::NO_CONTENT => Ok(()),
             StatusCode::METHOD_NOT_ALLOWED => Ok(()), // 目录已存在
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(WebdavError::Auth),
-            s => Err(WebdavError::Server { status: s.as_u16(), url: url.to_string() }),
+            s => Err(WebdavError::Server {
+                status: s.as_u16(),
+                url: url.to_string(),
+            }),
         }
     }
 
@@ -196,17 +237,29 @@ impl WebdavClient {
         let resp = req.send().await?;
         match resp.status() {
             StatusCode::OK => {
-                let etag = resp.headers().get("etag").and_then(|v| v.to_str().ok()).map(String::from);
+                let etag = resp
+                    .headers()
+                    .get("etag")
+                    .and_then(|v| v.to_str().ok())
+                    .map(String::from);
                 Ok((resp.bytes().await?.to_vec(), etag))
             }
             StatusCode::NOT_FOUND => Err(WebdavError::NotFound(path.into())),
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(WebdavError::Auth),
-            s => Err(WebdavError::Server { status: s.as_u16(), url: url.to_string() }),
+            s => Err(WebdavError::Server {
+                status: s.as_u16(),
+                url: url.to_string(),
+            }),
         }
     }
 
     /// PUT 上传；指定 if_match 时附加 If-Match 条件头
-    pub async fn put(&self, path: &str, data: &[u8], if_match: Option<&str>) -> Result<String, WebdavError> {
+    pub async fn put(
+        &self,
+        path: &str,
+        data: &[u8],
+        if_match: Option<&str>,
+    ) -> Result<String, WebdavError> {
         let url = self.url_for(path)?;
         let mut req = self.client.put(url.clone());
         if let Some(etag) = if_match {
@@ -219,14 +272,21 @@ impl WebdavClient {
         let resp = req.body(data.to_vec()).send().await?;
         match resp.status() {
             StatusCode::CREATED | StatusCode::OK | StatusCode::NO_CONTENT => {
-                let etag = resp.headers().get("etag").and_then(|v| v.to_str().ok()).map(String::from);
+                let etag = resp
+                    .headers()
+                    .get("etag")
+                    .and_then(|v| v.to_str().ok())
+                    .map(String::from);
                 Ok(etag.unwrap_or_default())
             }
             StatusCode::PRECONDITION_FAILED => Err(WebdavError::PreconditionFailed),
             StatusCode::LOCKED => Err(WebdavError::Locked),
             StatusCode::TOO_MANY_REQUESTS => Err(WebdavError::TooManyRequests),
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(WebdavError::Auth),
-            s => Err(WebdavError::Server { status: s.as_u16(), url: url.to_string() }),
+            s => Err(WebdavError::Server {
+                status: s.as_u16(),
+                url: url.to_string(),
+            }),
         }
     }
 }

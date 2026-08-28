@@ -115,10 +115,7 @@ pub fn uninstall() -> Result<()> {
     )
     .map_err(|e| anyhow!("打开 SCM 失败: {e}"))?;
     let service = manager
-        .open_service(
-            SERVICE_NAME,
-            ServiceAccess::STOP | ServiceAccess::DELETE,
-        )
+        .open_service(SERVICE_NAME, ServiceAccess::STOP | ServiceAccess::DELETE)
         .map_err(|e| anyhow!("打开服务失败: {e}"))?;
     // 忽略停止失败（可能未运行）
     let _ = service.stop();

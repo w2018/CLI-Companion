@@ -16,6 +16,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// 同步引擎（busy 锁保证单一同步任务）
+#[derive(Default)]
 pub struct SyncEngine {
     busy: Mutex<()>,
 }
@@ -43,7 +44,9 @@ pub struct SyncReport {
 
 impl SyncEngine {
     pub fn new() -> Self {
-        Self { busy: Mutex::new(()) }
+        Self {
+            busy: Mutex::new(()),
+        }
     }
 
     fn remote_file_path(settings: &crate::app_config::WebdavSettings) -> String {
@@ -71,7 +74,9 @@ impl SyncEngine {
     }
 
     /// 构建 WebDAV 客户端（从配置 + secrets 读凭据）
-    async fn build_client(state: &AppState) -> Result<(WebdavClient, crate::app_config::WebdavSettings), RpcError> {
+    async fn build_client(
+        state: &AppState,
+    ) -> Result<(WebdavClient, crate::app_config::WebdavSettings), RpcError> {
         let app = state.app().await;
         let settings = app.webdav.clone();
         if !settings.enabled {
@@ -125,7 +130,11 @@ impl SyncEngine {
         let mut sync_st = Self::load_state(&state);
 
         let result: Result<SyncReport, RpcError> = async {
-            match client.propfind(&remote_path).await.map_err(|e| Self::map_webdav_err(&e))? {
+            match client
+                .propfind(&remote_path)
+                .await
+                .map_err(|e| Self::map_webdav_err(&e))?
+            {
                 // 远端不存在 → 首次上传
                 None => {
                     let etag = client
@@ -175,8 +184,9 @@ impl SyncEngine {
                     } else if sync_st.last_synced_local_sha.as_deref() == Some(local_sha.as_str()) {
                         // 本地自上次同步后未改 → 应用远端（先校验 schema）
                         let text = String::from_utf8_lossy(&remote_bytes).to_string();
-                        let cfg = ServicesConfig::from_json(&text)
-                            .map_err(|e| RpcError::new(ErrorCode::Validation, format!("远端配置校验失败: {e}")))?;
+                        let cfg = ServicesConfig::from_json(&text).map_err(|e| {
+                            RpcError::new(ErrorCode::Validation, format!("远端配置校验失败: {e}"))
+                        })?;
                         state
                             .save_services(cfg)
                             .await
@@ -193,8 +203,9 @@ impl SyncEngine {
                         let ts = Utc::now().format("%Y%m%d-%H%M%S");
                         let conflict_name = format!("services.conflict.{ts}.json");
                         let conflict_path = state.dirs.cache.join(&conflict_name);
-                        std::fs::write(&conflict_path, &remote_bytes)
-                            .map_err(|e| RpcError::new(ErrorCode::Internal, format!("写入冲突文件失败: {e}")))?;
+                        std::fs::write(&conflict_path, &remote_bytes).map_err(|e| {
+                            RpcError::new(ErrorCode::Internal, format!("写入冲突文件失败: {e}"))
+                        })?;
                         let etag = client
                             .put(&remote_path, &local_bytes, None)
                             .await
@@ -203,7 +214,8 @@ impl SyncEngine {
                         sync_st.last_synced_local_sha = Some(local_sha);
                         Ok(SyncReport {
                             action: "conflict_lww".into(),
-                            message: "检测到双向修改：已保留本地版本，远端版本另存为冲突文件".into(),
+                            message: "检测到双向修改：已保留本地版本，远端版本另存为冲突文件"
+                                .into(),
                             conflict_file: Some(conflict_path.display().to_string()),
                         })
                     }
@@ -248,7 +260,11 @@ impl SyncEngine {
     pub async fn test_connection(&self, state: &AppState) -> Result<Value, RpcError> {
         let (client, settings) = Self::build_client(state).await?;
         let remote_path = Self::remote_file_path(&settings);
-        match client.propfind(&remote_path).await.map_err(|e| Self::map_webdav_err(&e))? {
+        match client
+            .propfind(&remote_path)
+            .await
+            .map_err(|e| Self::map_webdav_err(&e))?
+        {
             Some(_) => Ok(json!({"ok": true, "message": "连接成功，远端配置存在"})),
             None => Ok(json!({"ok": true, "message": "连接成功，远端暂无配置"})),
         }
@@ -260,9 +276,8 @@ pub fn spawn_scheduler(state: AppState) {
     tokio::spawn(async move {
         loop {
             let app = state.app().await;
-            let interval = std::time::Duration::from_secs(
-                app.webdav.sync_interval_minutes.max(1) as u64 * 60,
-            );
+            let interval =
+                std::time::Duration::from_secs(app.webdav.sync_interval_minutes.max(1) as u64 * 60);
             tokio::time::sleep(interval).await;
             let app = state.app().await;
             if !app.webdav.enabled || app.webdav.url.is_empty() {

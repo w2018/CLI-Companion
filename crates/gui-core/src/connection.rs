@@ -21,9 +21,12 @@ impl DaemonConnection {
         method: Method,
         params: Option<serde_json::Value>,
     ) -> Result<serde_json::Value, RpcError> {
-        let mut pipe = ClientOptions::new()
-            .open(PIPE_NAME)
-            .map_err(|_| RpcError::new(RpcErrorCode::DaemonUnavailable, "守护进程不可达（未运行或管道已断开）"))?;
+        let mut pipe = ClientOptions::new().open(PIPE_NAME).map_err(|_| {
+            RpcError::new(
+                RpcErrorCode::DaemonUnavailable,
+                "守护进程不可达（未运行或管道已断开）",
+            )
+        })?;
         let req = Request::new(Self::next_id(), method, params);
         codec::write_frame(&mut pipe, &req).await?;
         let resp: Response = codec::read_frame(&mut pipe).await?;
@@ -32,7 +35,7 @@ impl DaemonConnection {
 
     /// 轻量存活探测
     pub async fn is_alive() -> bool {
-        matches!(Self::call(Method::SystemPing, None).await, Ok(_))
+        Self::call(Method::SystemPing, None).await.is_ok()
     }
 
     /// 确保 daemon 在运行：先探测；未运行则从 GUI 同目录拉起（开发文档 §2.1 GUI 启动流程）

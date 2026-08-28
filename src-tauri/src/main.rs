@@ -71,8 +71,20 @@ fn install_panic_logger() {
 /// 创建系统托盘（右键弹菜单；左键单击切换窗口显隐）
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
-    let quit_gui = MenuItem::with_id(app, "quit_gui", "退出 GUI（服务保持运行）", true, None::<&str>)?;
-    let quit_all = MenuItem::with_id(app, "quit_all", "完全退出（停止全部服务）", true, None::<&str>)?;
+    let quit_gui = MenuItem::with_id(
+        app,
+        "quit_gui",
+        "退出 GUI（服务保持运行）",
+        true,
+        None::<&str>,
+    )?;
+    let quit_all = MenuItem::with_id(
+        app,
+        "quit_all",
+        "完全退出（停止全部服务）",
+        true,
+        None::<&str>,
+    )?;
     let menu = Menu::with_items(app, &[&show, &quit_gui, &quit_all])?;
 
     let mut builder = TrayIconBuilder::with_id("main-tray")

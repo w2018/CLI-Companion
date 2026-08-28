@@ -88,7 +88,9 @@ impl Secrets {
 
     /// 读取 WebDAV 密码明文
     pub fn webdav_password(&self) -> Option<String> {
-        self.webdav_password_dpapi.as_deref().and_then(|s| dpapi::unprotect(s).ok())
+        self.webdav_password_dpapi
+            .as_deref()
+            .and_then(|s| dpapi::unprotect(s).ok())
     }
 }
 
