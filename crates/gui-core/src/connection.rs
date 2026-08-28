@@ -60,6 +60,28 @@ impl DaemonConnection {
         Self::call(Method::SystemPing, None).await.is_ok()
     }
 
+    /// 请求 daemon 关闭并等待管道消失（完全退出流程的可靠路径）。
+    ///
+    /// 返回 true 表示 daemon 已退出（或本就不可达）；false 表示等待超时仍存活。
+    /// 不经过前端 webview，托盘兜底退出用，避免 webview 卡住时漏发关闭指令。
+    pub async fn shutdown_and_wait(stop_services: bool, max_wait_ms: u64) -> bool {
+        let _ = Self::call(
+            Method::DaemonShutdown,
+            Some(serde_json::json!({ "stop_services": stop_services })),
+        )
+        .await;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(max_wait_ms);
+        loop {
+            if !Self::is_alive().await {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+    }
+
     /// 确保 daemon 在运行：先探测；未运行则从 GUI 同目录拉起（开发文档 §2.1 GUI 启动流程）
     ///
     /// 返回 true 表示 daemon 已就绪。

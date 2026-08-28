@@ -103,17 +103,22 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             }
             "quit_all" => {
                 // 完全退出：显示窗口并通知前端执行"逐条停止服务"进度流程，
-                // 前端完成后自行销毁窗口退出；此处仅做兜底定时退出
+                // 前端完成后自行销毁窗口退出；此处仅做兜底
                 if let Some(win) = app.get_webview_window("main") {
                     let _ = win.show();
                     let _ = win.set_focus();
                     let _ = win.emit("quit-all-requested", ());
                 }
-                // 兜底：前端无响应（webview 未加载等异常）时强制退出；
-                // 正常路径由前端完成停止进度后自行销毁窗口，远快于此
+                // 兜底：前端无响应（webview 未加载/事件未送达/停止超时）时，
+                // 退出 GUI 前由 Rust 直接向 daemon 发关闭指令并等待其退出。
+                // 此前仅 app.exit(0)，会漏发 daemon.shutdown 导致 daemon 残留。
+                // 正常路径由前端完成停止进度后自行销毁窗口，远快于此。
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    // daemon 已被前端关闭时这里立即返回；否则补发（含停止全部服务）
+                    let _ = gui_core::connection::DaemonConnection::shutdown_and_wait(true, 5_000)
+                        .await;
                     app.exit(0);
                 });
             }
