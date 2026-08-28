@@ -135,6 +135,11 @@ pub async fn bootstrap(
                 if attempt == 0 {
                     tracing::info!("检测到旧实例（锁: {p}），等待其退出…");
                 }
+                // 已有健康实例正在服务 → 立即退出，避免产生多余的 daemon 进程
+                // （管道不可达说明旧实例正在退出，继续等待锁以支持"刚停就启"）
+                if crate::rpc::existing_daemon_alive().await {
+                    return Err(anyhow::anyhow!("已有 daemon 实例在服务，本实例退出"));
+                }
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             }
             Err(e) => return Err(e.into()),

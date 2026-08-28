@@ -5,11 +5,9 @@
 //! 连接断开自动重连（daemon 未运行时静默重试）。
 
 use crate::connection::DaemonConnection;
-use cli_companion_platform::PIPE_NAME;
 use cli_companion_protocol::codec;
 use cli_companion_protocol::{Method, Request, Response};
 use tauri::Emitter;
-use tokio::net::windows::named_pipe::ClientOptions;
 
 /// 转发给前端的事件名（前端 listen("daemon-event") 接收）
 pub const EVENT_NAME: &str = "daemon-event";
@@ -31,8 +29,8 @@ pub fn spawn(app: tauri::AppHandle) {
 
 /// 单轮：连接 → 订阅 → 循环转发事件帧
 async fn run_once(app: &tauri::AppHandle) -> Result<(), String> {
-    let mut pipe = ClientOptions::new()
-        .open(PIPE_NAME)
+    let mut pipe = super::connection::open_pipe()
+        .await
         .map_err(|_| "daemon 管道不可达".to_string())?;
     let req = Request::new(DaemonConnection::next_id(), Method::EventSubscribe, None);
     codec::write_frame(&mut pipe, &req)

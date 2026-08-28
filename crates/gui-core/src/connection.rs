@@ -4,10 +4,31 @@ use cli_companion_platform::PIPE_NAME;
 use cli_companion_protocol::codec;
 use cli_companion_protocol::{Method, Request, Response, RpcError};
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::net::windows::named_pipe::ClientOptions;
+use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
 
 /// 全局请求 ID 计数器
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Windows ERROR_PIPE_BUSY：所有管道实例被占用（并发连接高峰），不代表 daemon 已退出
+const ERROR_PIPE_BUSY: i32 = 232;
+
+/// 并发拉起去重：多个命令同时发现 daemon 不可达时，只有一个真正执行拉起流程
+static ENSURE_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// 连接管道（ERROR_PIPE_BUSY 时短暂重试，总计约 1 秒）
+pub(crate) async fn open_pipe() -> std::io::Result<NamedPipeClient> {
+    for _ in 0..20 {
+        match ClientOptions::new().open(PIPE_NAME) {
+            Ok(p) => return Ok(p),
+            // 实例被占用：稍等重试（服务端循环会持续补充新实例）
+            Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::from_raw_os_error(ERROR_PIPE_BUSY))
+}
 
 pub struct DaemonConnection;
 
@@ -22,7 +43,7 @@ impl DaemonConnection {
         method: Method,
         params: Option<serde_json::Value>,
     ) -> Result<serde_json::Value, RpcError> {
-        let mut pipe = ClientOptions::new().open(PIPE_NAME).map_err(|_| {
+        let mut pipe = open_pipe().await.map_err(|_| {
             RpcError::new(
                 RpcErrorCode::DaemonUnavailable,
                 "守护进程不可达（未运行或管道已断开）",
@@ -51,6 +72,12 @@ impl DaemonConnection {
             }
             // 二次 ping 失败 → 旧实例正在退出，继续走拉起流程
             // （新 daemon 启动时会等待旧实例的锁释放，最多 15 秒）
+        }
+        // 拉起流程串行化：并发命令同时发现不可达时只有一个真正拉起，
+        // 其余任务在拿到守护锁后复测存活，避免误拉起多个 daemon 进程
+        let _guard = ENSURE_GUARD.lock().await;
+        if Self::is_alive().await {
+            return Ok(true);
         }
         // 2. 定位同目录的 daemon exe（安装版与开发版都在同一目录）
         let exe = std::env::current_exe().map_err(|e| format!("获取 GUI 路径失败: {e}"))?;
@@ -81,8 +108,8 @@ impl DaemonConnection {
             return Err(format!("启动 daemon 失败: {e}"));
         }
         tracing::info!("已拉起 daemon: {}", daemon.display());
-        // 4. 等待管道就绪（最多 6 秒：含单例锁、配置加载）
-        for _ in 0..30 {
+        // 4. 等待管道就绪（最多 20 秒：新 daemon 可能等待旧实例锁最长 15 秒，加配置加载）
+        for _ in 0..100 {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             if Self::is_alive().await {
                 return Ok(true);
