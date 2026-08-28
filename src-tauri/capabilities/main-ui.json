@@ -15,7 +15,6 @@
     "core:tray:default",
     "core:menu:default",
     "opener:default",
-    "autostart:default",
     "dialog:default",
     "core:window:allow-destroy"
   ]

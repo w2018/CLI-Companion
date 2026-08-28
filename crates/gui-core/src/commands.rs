@@ -67,6 +67,18 @@ pub async fn ensure_daemon() -> Result<bool, String> {
     DaemonConnection::ensure_daemon().await
 }
 
+/// 读取开机自启模式（off | daemon | both；从未配置默认 daemon）
+#[tauri::command]
+pub async fn get_boot_autostart_mode() -> Result<String, String> {
+    crate::autostart::get_mode()
+}
+
+/// 设置开机自启模式（off | daemon | both），立即同步登录启动项
+#[tauri::command]
+pub async fn set_boot_autostart_mode(mode: String) -> Result<(), String> {
+    crate::autostart::set_mode(&mode)
+}
+
 /// 设置 daemon 自动拉起开关（显式停止 daemon 前由前端关闭）
 #[tauri::command]
 pub async fn set_daemon_autostart(allowed: bool) -> Result<(), String> {

@@ -24,20 +24,21 @@ fn main() {
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
-        ))
         .invoke_handler(tauri::generate_handler![
             gui_core::commands::daemon_rpc,
             gui_core::commands::daemon_status,
             gui_core::commands::ensure_daemon,
             gui_core::commands::set_daemon_autostart,
+            gui_core::commands::get_boot_autostart_mode,
+            gui_core::commands::set_boot_autostart_mode,
             gui_core::commands::exit_app,
             gui_core::commands::read_text_file,
             gui_core::commands::write_text_file
         ])
         .setup(|app| {
+            // 开机自启：首次使用写入默认模式（登录后自动启动 daemon），
+            // 并把登录启动项与已存模式对齐（自愈）。失败只记日志，不阻塞启动。
+            gui_core::autostart::apply_startup_default();
             // daemon 事件流订阅转发：管道长连接 → "daemon-event" Tauri 事件
             gui_core::events::spawn(app.handle().clone());
             setup_tray(app)?;

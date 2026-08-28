@@ -6,6 +6,11 @@
 //! - `--install-service` / `--uninstall-service`：安装/卸载服务（需管理员权限）
 //! - `--portable`：便携模式，数据目录固定为 exe 所在目录（写入 portable.marker）
 //! - `--data-dir <dir>`：显式指定数据目录（开发用）
+//!
+//! release 构建为 windows 子系统（无控制台）：开机自启经注册表 Run 项拉起时
+//! 不闪黑框；日志走 daemon.log 文件，不依赖控制台。debug 构建保留控制台便于开发。
+
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

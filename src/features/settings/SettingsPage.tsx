@@ -2,7 +2,6 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
-import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { rpc, rpcSchema } from "../../shared/rpc/client";
 import { ConfigGetSchema, SyncStatusSchema, type AppConfig } from "../../shared/rpc/schema";
@@ -38,24 +37,29 @@ export function SettingsPage() {
     null,
   );
 
-  // ===== 开机自启（GUI 开机启动；GUI 启动会自动拉起 daemon）=====
-  const [autoStart, setAutoStart] = useState(false);
-  useEffect(() => {
-    isEnabled()
-      .then(setAutoStart)
-      .catch(() => setAutoStart(false));
-  }, []);
-  const toggleAutoStart = async (on: boolean) => {
-    setBusy(true);
+  // ===== 开机自启模式（off | daemon | both；默认 daemon：登录后仅启动 daemon，不开 GUI）=====
+  const bootMode = useQuery({
+    queryKey: ["bootAutostartMode"],
+    queryFn: () => invoke<string>("get_boot_autostart_mode"),
+  });
+  const [bootModeBusy, setBootModeBusy] = useState(false);
+  const changeBootMode = async (mode: string) => {
+    setBootModeBusy(true);
     try {
-      if (on) await enable();
-      else await disable();
-      setAutoStart(on);
-      pushToast("ok", on ? "已开启开机自启" : "已关闭开机自启");
+      await invoke("set_boot_autostart_mode", { mode });
+      pushToast(
+        "ok",
+        mode === "off"
+          ? "已关闭开机自启"
+          : mode === "both"
+            ? "已设置：登录后启动 GUI 并拉起 daemon"
+            : "已设置：登录后自动启动 daemon（不打开 GUI）",
+      );
+      void qc.invalidateQueries({ queryKey: ["bootAutostartMode"] });
     } catch (e) {
       pushToast("err", describeError(e as never));
     } finally {
-      setBusy(false);
+      setBootModeBusy(false);
     }
   };
 
@@ -226,16 +230,23 @@ export function SettingsPage() {
             <option value="en">English</option>
           </select>
         </Row>
-        {/* 需求②①：开机自启（GUI 自启，GUI 启动会自动拉起 daemon） */}
+        {/* 开机自启：三档模式，默认 daemon（登录 Windows 后自动启动 daemon 进程，不显示 GUI） */}
         <Row label="开机自动启动">
-          <input
-            type="checkbox"
-            className="size-4 accent-[rgb(var(--accent))]"
-            checked={autoStart}
-            disabled={busy}
-            onChange={(e) => void toggleAutoStart(e.target.checked)}
-          />
-          <p className="mt-1 text-xs text-muted">登录 Windows 后自动启动 GUI 并拉起 daemon</p>
+          <div>
+            <select
+              className={inputCls}
+              value={bootMode.data ?? "daemon"}
+              disabled={bootModeBusy || bootMode.isPending}
+              onChange={(e) => void changeBootMode(e.target.value)}
+            >
+              <option value="off">关闭（不自启动）</option>
+              <option value="daemon">仅启动 daemon（默认）</option>
+              <option value="both">启动 daemon + GUI</option>
+            </select>
+            <p className="mt-1 text-xs text-muted">
+              登录 Windows 后自动启动 daemon 进程（默认不显示 GUI 窗口）；切换立即生效
+            </p>
+          </div>
         </Row>
         {/* 需求②②：关闭行为 */}
         <Row label="关闭窗口时最小化到托盘">
