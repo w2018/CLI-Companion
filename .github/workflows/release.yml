@@ -59,7 +59,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist-release
-          f=$(find target/release/bundle/nsis src-tauri/target/release/bundle/nsis -name '*_x64-setup.exe' 2>/dev/null | head -1)
+          # find 对不存在的候选路径会返回非零（set -e/-o pipefail 下致命），需容错
+          f=$((find target/release/bundle/nsis src-tauri/target/release/bundle/nsis -name '*_x64-setup.exe' 2>/dev/null || true) | head -1)
           if [ -z "$f" ]; then
             echo "未找到安装包：" && find . -name '*.exe' -path '*nsis*' && exit 1
           fi
