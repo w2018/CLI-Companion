@@ -188,15 +188,23 @@ export function ServiceList() {
             <li
               key={row.service.id}
               draggable
-              onDragStart={() => {
+              onDragStart={(e) => {
                 dragId.current = row.service.id;
+                // WebView2/Chromium：dragstart 必须写入拖拽数据，否则拖拽不启动
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", row.service.id);
               }}
               onDragOver={(e) => handleDragOver(e, row.service.id)}
+              onDragEnter={(e) => handleDragOver(e, row.service.id)}
+              onDrop={(e) => {
+                e.preventDefault();
+                void commitOrder();
+              }}
               onDragEnd={() => {
                 if (ordered) void commitOrder();
               }}
               className="cursor-grab px-4 py-3 active:cursor-grabbing"
-              title="可拖拽调整顺序"
+              title="功能：按住整行拖动可调整服务顺序，松手自动保存"
             >
               <div className="flex flex-wrap items-center gap-3">
                 <div className="min-w-0 flex-1">

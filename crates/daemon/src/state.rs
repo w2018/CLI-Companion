@@ -143,7 +143,8 @@ pub async fn bootstrap(
                 }
                 // 管道不可达：旧实例可能正在退出，等待其释放锁后接管
                 if attempt == 0 {
-                    tracing::info!("检测到旧实例正在退出（锁: {p}），等待其释放后接管…");
+                    // 用户要求屏蔽刷屏：该场景仅短暂存在（旧实例毫秒级退场），降为 debug
+                    tracing::debug!("检测到旧实例正在退出（锁: {p}），等待其释放后接管…");
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             }
