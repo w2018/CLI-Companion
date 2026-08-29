@@ -138,19 +138,17 @@ async fn handle_conn(stream: &mut TcpStream, state: &AppState) -> std::io::Resul
                 .to_string(),
             )
         }
-        ("GET", "/") | ("GET", "/index.html") => (
-            "200 OK".into(),
-            "text/html; charset=utf-8".into(),
-            PAGE_HTML.to_string(),
-        ),
+        ("GET", "/") | ("GET", "/index.html") => {
+            ("200 OK", "text/html; charset=utf-8", PAGE_HTML.to_string())
+        }
         ("GET", _) => (
-            "404 Not Found".into(),
-            "text/plain; charset=utf-8".into(),
+            "404 Not Found",
+            "text/plain; charset=utf-8",
             "not found".into(),
         ),
         _ => (
-            "405 Method Not Allowed".into(),
-            "text/plain; charset=utf-8".into(),
+            "405 Method Not Allowed",
+            "text/plain; charset=utf-8",
             "read-only".into(),
         ),
     };
@@ -320,11 +318,13 @@ mod tests {
         let svc_id = svc.id;
         cfg.services.push(svc);
         let mut runtimes = HashMap::new();
-        let mut rt = RuntimeState::default();
-        rt.status = ServiceStatus::Running;
-        rt.pid = Some(42);
-        rt.restart_count = 3;
-        rt.last_exit_code = Some(7);
+        let rt = RuntimeState {
+            status: ServiceStatus::Running,
+            pid: Some(42),
+            restart_count: 3,
+            last_exit_code: Some(7),
+            ..Default::default()
+        };
         runtimes.insert(svc_id, rt);
 
         let v = build_status_json(
