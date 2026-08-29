@@ -8,7 +8,14 @@ use crate::rpc::existing_daemon_alive;
 use std::process::{Command, Stdio};
 
 /// 看门狗检查入口：返回 true 表示 daemon 已在运行（或成功拉起）
+///
+/// 二次确认模式（与 GUI ensure_daemon 一致）：第一次探测失败后等 400ms
+/// 再探一次，两次都不可达才拉起——避免管道瞬时繁忙被误判为"已死"。
 pub async fn ensure_daemon_if_needed() -> bool {
+    if existing_daemon_alive().await {
+        return true;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     if existing_daemon_alive().await {
         return true;
     }

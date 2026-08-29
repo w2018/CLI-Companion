@@ -47,9 +47,9 @@ export function EmbeddedTerminal() {
         serviceId,
       });
       let id: number;
-      if (existing) {
+      if (existing && typeof existing.id === "number") {
         id = existing.id;
-        term.write(existing.backlog);
+        term.write(existing.backlog ?? "");
       } else {
         id = await invoke<number>("pty_open", { serviceId });
       }

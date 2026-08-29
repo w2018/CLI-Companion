@@ -134,13 +134,16 @@ pub async fn bootstrap(
                 break;
             }
             Err(LockError::AlreadyRunning(p)) => {
-                if attempt == 0 {
-                    tracing::info!("检测到旧实例（锁: {p}），等待其退出…");
-                }
-                // 已有健康实例正在服务 → 立即退出，避免产生多余的 daemon 进程
-                // （管道不可达说明旧实例正在退出，继续等待锁以支持"刚停就启"）
+                // 管道可达 = 已有健康实例在正常服务：本实例无事可做，静默成功退出
+                // （不刷"检测到旧实例"日志——看门狗/自启/GUI 的冗余拉起都走这里，
+                // 属正常情况而非错误；ERROR 级退出还会在 main 里再打一行）
                 if crate::rpc::existing_daemon_alive().await {
-                    return Err(anyhow::anyhow!("已有 daemon 实例在服务，本实例退出"));
+                    tracing::info!("已有 daemon 实例在服务，本实例退出");
+                    return Ok(());
+                }
+                // 管道不可达：旧实例可能正在退出，等待其释放锁后接管
+                if attempt == 0 {
+                    tracing::info!("检测到旧实例正在退出（锁: {p}），等待其释放后接管…");
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             }
@@ -186,13 +189,8 @@ pub async fn bootstrap(
     // 6. WebDAV 周期同步调度
     crate::sync::spawn_scheduler(state.clone());
 
-    // 6.5 v2.2.0：本机只读状态页（按开关；修改开关后需重启 daemon 生效）
-    let app_cfg = state.app().await;
-    crate::status_http::spawn_if_enabled(
-        state.clone(),
-        app_cfg.status_page.enabled,
-        app_cfg.status_page.port,
-    );
+    // 6.5 v2.2.0：本机只读状态页（监督任务随 config.changed 即时启停/换端口）
+    crate::status_http::spawn_supervisor(state.clone());
 
     // 7. 管道 RPC 服务 + 关闭等待
     let shutdown = state.shutdown.clone();

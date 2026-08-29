@@ -562,8 +562,8 @@ export function SettingsPage() {
               />
             </div>
             <p className="mt-1 text-xs text-muted">
-              仅本机 127.0.0.1 可访问的只读页面（服务名/状态/CPU/内存），不含环境变量与任何
-              操作能力；修改后需重启 daemon 生效。访问 http://127.0.0.1:端口/
+              仅本机 127.0.0.1 可访问的只读页面（服务状态/CPU/内存/重启统计），不含环境变量与任何
+              操作能力；保存后即时生效，无需重启 daemon。访问 http://127.0.0.1:端口/
             </p>
           </div>
         </Row>

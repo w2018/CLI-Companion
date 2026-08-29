@@ -243,10 +243,17 @@ pub async fn pty_open(
     Ok(id)
 }
 
+/// pty_attach 的恢复信息（结构体序列化为 {id, backlog}，避免元组被序列化成数组）
+#[derive(serde::Serialize)]
+pub struct AttachInfo {
+    pub id: u64,
+    pub backlog: String,
+}
+
 /// 重进页面时恢复会话：按服务查找既有 PTY，返回 (id, 回放缓冲)；无则 None
 #[tauri::command]
-pub async fn pty_attach(service_id: String) -> Result<Option<(u64, String)>, String> {
-    Ok(attach_by_service(&service_id))
+pub async fn pty_attach(service_id: String) -> Result<Option<AttachInfo>, String> {
+    Ok(attach_by_service(&service_id).map(|(id, backlog)| AttachInfo { id, backlog }))
 }
 
 #[tauri::command]
@@ -361,7 +368,8 @@ mod tests {
             }
         }
         assert!(saw_output, "10+15 秒内未收到任何 PTY 输出");
-        let (aid, backlog) = attach_by_service("test-attach-svc").expect("离开页面后应能 attach 到既有会话");
+        let (aid, backlog) =
+            attach_by_service("test-attach-svc").expect("离开页面后应能 attach 到既有会话");
         assert_eq!(aid, id);
         assert!(
             backlog.contains("attach-marker-77f0"),

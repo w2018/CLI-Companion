@@ -18,11 +18,28 @@ const SHUTDOWN_GRACE_MS: u64 = 200;
 /// 用于新实例启动时区分两种情况：
 /// - 管道可达 → 已有实例在正常服务，本实例应立即退出，不留多余进程；
 /// - 管道不可达（旧实例退出中）→ 等待其释放单例锁后接管。
+///
+/// 管道打开遇 ERROR_PIPE_BUSY（实例被占满）时短暂重试——GUI 每 3s 轮询等
+/// 并发场景下瞬时 BUSY 很常见，一次失败即返回 false 会让看门狗误判
+/// "daemon 已死"而冗余拉起（刷出"检测到旧实例"日志）。
 pub async fn existing_daemon_alive() -> bool {
     use tokio::net::windows::named_pipe::ClientOptions;
-    let mut pipe = match ClientOptions::new().open(PIPE_NAME) {
-        Ok(p) => p,
-        Err(_) => return false,
+    const ERROR_PIPE_BUSY: i32 = 232;
+    let mut pipe = None;
+    for _ in 0..20 {
+        match ClientOptions::new().open(PIPE_NAME) {
+            Ok(p) => {
+                pipe = Some(p);
+                break;
+            }
+            Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            Err(_) => return false, // 管道不存在：确实没有实例
+        }
+    }
+    let Some(mut pipe) = pipe else {
+        return false;
     };
     let req = Request::new(1, method::Method::SystemPing, None);
     if codec::write_frame(&mut pipe, &req).await.is_err() {
