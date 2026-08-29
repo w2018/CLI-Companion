@@ -138,6 +138,10 @@ export const AppConfigSchema = z.object({
     sync_config: z.boolean(),
     sync_cli_apps: z.boolean(),
   }),
+  // v2.2.0：本机只读状态页（旧版本 app.json 无此段）
+  status_page: z
+    .object({ enabled: z.boolean().optional(), port: z.number().optional() })
+    .optional(),
 });
 export type AppConfig = z.infer<typeof AppConfigSchema>;
 

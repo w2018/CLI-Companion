@@ -34,7 +34,12 @@ pub fn create_args(daemon_exe: &str) -> Vec<String> {
 
 /// 删除任务的参数
 pub fn delete_args() -> Vec<String> {
-    vec!["/Delete".into(), "/F".into(), "/TN".into(), WATCHDOG_TASK.into()]
+    vec![
+        "/Delete".into(),
+        "/F".into(),
+        "/TN".into(),
+        WATCHDOG_TASK.into(),
+    ]
 }
 
 /// 查询任务是否存在的参数

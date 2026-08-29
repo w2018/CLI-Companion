@@ -106,12 +106,20 @@ mod tests {
         assert!(!mem_alert_triggered(None, Some(9_999_999_999), None));
         assert!(!mem_alert_triggered(Some(512), None, None));
         // 未超阈值：不告警
-        assert!(!mem_alert_triggered(Some(512), Some(512 * 1024 * 1024), None));
+        assert!(!mem_alert_triggered(
+            Some(512),
+            Some(512 * 1024 * 1024),
+            None
+        ));
         // 超阈值首次：告警
         let over = 513 * 1024 * 1024;
         assert!(mem_alert_triggered(Some(512), Some(over), None));
         // 冷却期内：不重复告警
-        assert!(!mem_alert_triggered(Some(512), Some(over), Some(Instant::now())));
+        assert!(!mem_alert_triggered(
+            Some(512),
+            Some(over),
+            Some(Instant::now())
+        ));
         // 冷却期已过：再次告警
         let past = Instant::now() - Duration::from_secs(601);
         assert!(mem_alert_triggered(Some(512), Some(over), Some(past)));

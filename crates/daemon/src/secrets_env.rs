@@ -7,10 +7,9 @@
 //! - 导出/WebDAV 同步的配置文件从此不含机密明文
 //! - 旧配置的明文机密由 [`migrate_existing`] 在 daemon 启动时一次性迁移
 
-use crate::app_config::{load_secrets, save_secrets, Secrets};
+use crate::app_config::{load_secrets, save_secrets};
 use crate::dirs::DataDirs;
 use cli_companion_domain::{ServiceDefinition, ServiceId};
-use std::collections::BTreeMap;
 
 /// services.json 中机密值的占位符（用户手输这个串的概率可忽略）
 pub const ENCRYPTED_PLACEHOLDER: &str = "__encrypted__";

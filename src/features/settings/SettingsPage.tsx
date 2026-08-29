@@ -526,6 +526,47 @@ export function SettingsPage() {
           关闭 GUI 不影响 daemon 与受管服务。停止 daemon 会同时停止全部受管服务；
           停止后可在此重新启动。
         </p>
+        {/* v2.2.0 任务10：本机只读状态页 */}
+        <Row label="本机状态页">
+          <div>
+            <div className="flex items-center justify-end gap-3">
+              <input
+                type="checkbox"
+                className="size-4 accent-[rgb(var(--accent))]"
+                checked={app.status_page?.enabled ?? false}
+                onChange={(e) =>
+                  setApp({
+                    ...app,
+                    status_page: {
+                      enabled: e.target.checked,
+                      port: app.status_page?.port ?? 8765,
+                    },
+                  })
+                }
+              />
+              <input
+                className="h-9 w-28 rounded-lg border border-surface-3 bg-surface px-3 text-sm focus:border-accent focus:outline-none"
+                type="number"
+                min={1024}
+                max={65535}
+                value={app.status_page?.port ?? 8765}
+                onChange={(e) =>
+                  setApp({
+                    ...app,
+                    status_page: {
+                      enabled: app.status_page?.enabled ?? false,
+                      port: Number(e.target.value) || 8765,
+                    },
+                  })
+                }
+              />
+            </div>
+            <p className="mt-1 text-xs text-muted">
+              仅本机 127.0.0.1 可访问的只读页面（服务名/状态/CPU/内存），不含环境变量与任何
+              操作能力；修改后需重启 daemon 生效。访问 http://127.0.0.1:端口/
+            </p>
+          </div>
+        </Row>
         <div className="flex justify-end gap-2 pt-1">
           {/* 修复：daemon 停止后可重新手动启动 */}
           <button

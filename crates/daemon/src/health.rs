@@ -37,7 +37,9 @@ pub async fn check_command(program: &str, args: &[String]) -> CheckOutcome {
             CheckOutcome::Unhealthy(format!("探活命令退出码 {}", status.code().unwrap_or(-1)))
         }
         Ok(Err(e)) => CheckOutcome::Unhealthy(format!("探活命令执行失败: {e}")),
-        Err(_) => CheckOutcome::Unhealthy(format!("探活命令超时（>{}ms）", CHECK_TIMEOUT.as_millis())),
+        Err(_) => {
+            CheckOutcome::Unhealthy(format!("探活命令超时（>{}ms）", CHECK_TIMEOUT.as_millis()))
+        }
     }
 }
 
@@ -61,7 +63,11 @@ mod tests {
     async fn 超时判定不健康() {
         // ping -n 5 约 4 秒，远超单测内改短的等待（直接用长命令 + 默认 5s 不可接受，
         // 这里用 cmd 的 choice 等待输入模拟挂起，5s 超时窗口内必不返回）
-        let r = check_command("cmd.exe", &["/C".into(), "ping -n 30 127.0.0.1 > nul".into()]).await;
+        let r = check_command(
+            "cmd.exe",
+            &["/C".into(), "ping -n 30 127.0.0.1 > nul".into()],
+        )
+        .await;
         assert!(matches!(r, CheckOutcome::Unhealthy(msg) if msg.contains("超时")));
     }
 

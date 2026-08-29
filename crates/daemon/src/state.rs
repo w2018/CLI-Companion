@@ -186,6 +186,14 @@ pub async fn bootstrap(
     // 6. WebDAV 周期同步调度
     crate::sync::spawn_scheduler(state.clone());
 
+    // 6.5 v2.2.0：本机只读状态页（按开关；修改开关后需重启 daemon 生效）
+    let app_cfg = state.app().await;
+    crate::status_http::spawn_if_enabled(
+        state.clone(),
+        app_cfg.status_page.enabled,
+        app_cfg.status_page.port,
+    );
+
     // 7. 管道 RPC 服务 + 关闭等待
     let shutdown = state.shutdown.clone();
     tokio::select! {

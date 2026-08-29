@@ -132,7 +132,11 @@ fn wrap_windows_terminal(
     program: &str,
     args: &[String],
 ) -> (String, Vec<String>) {
-    let mut out = vec!["new-tab".to_string(), "--title".to_string(), title.to_string()];
+    let mut out = vec![
+        "new-tab".to_string(),
+        "--title".to_string(),
+        title.to_string(),
+    ];
     if let Some(wd) = working_dir {
         out.push("-d".to_string());
         out.push(wd.to_string());

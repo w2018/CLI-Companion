@@ -11,6 +11,8 @@ pub struct AppConfig {
     pub version: u32,
     pub general: GeneralSettings,
     pub webdav: WebdavSettings,
+    /// v2.2.0：本机只读状态页
+    pub status_page: StatusPageSettings,
 }
 
 impl Default for AppConfig {
@@ -19,6 +21,24 @@ impl Default for AppConfig {
             version: 1,
             general: GeneralSettings::default(),
             webdav: WebdavSettings::default(),
+            status_page: StatusPageSettings::default(),
+        }
+    }
+}
+
+/// 本机只读状态页（v2.2.0）：仅绑定 127.0.0.1，只读展示，无任何操作能力
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields, default)]
+pub struct StatusPageSettings {
+    pub enabled: bool,
+    pub port: u16,
+}
+
+impl Default for StatusPageSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: 8765,
         }
     }
 }

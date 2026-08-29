@@ -433,7 +433,12 @@ impl Actor {
                     &self.dirs,
                     self.as_service,
                     "内存告警",
-                    &format!("{}：内存 {} MB 已超过阈值 {} MB", self.def_name(), mb, limit),
+                    &format!(
+                        "{}：内存 {} MB 已超过阈值 {} MB",
+                        self.def_name(),
+                        mb,
+                        limit
+                    ),
                 );
             }
         }
