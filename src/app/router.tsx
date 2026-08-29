@@ -7,6 +7,7 @@ import { LogViewer } from "../features/logs/LogViewer";
 import { DaemonLogPage } from "../features/logs/DaemonLogPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { AboutPage } from "../features/about/AboutPage";
+import { EmbeddedTerminal } from "../features/terminal/EmbeddedTerminal";
 
 export const router = createBrowserRouter([
   {
@@ -19,6 +20,7 @@ export const router = createBrowserRouter([
       { path: "daemon-log", element: <DaemonLogPage /> },
       { path: "settings", element: <SettingsPage /> },
       { path: "about", element: <AboutPage /> },
+      { path: "terminal/:serviceId", element: <EmbeddedTerminal /> },
     ],
   },
 ]);

@@ -16,6 +16,8 @@ tracing.workspace = true
 cli-companion-protocol.workspace = true
 cli-companion-platform.workspace = true
 tauri = { version = "2", features = ["tray-icon"] }
+# v2.2.0：内嵌终端 ConPTY
+portable-pty = "0.9"
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
 

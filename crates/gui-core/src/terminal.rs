@@ -13,15 +13,15 @@ use std::process::Command;
 /// CREATE_NEW_CONSOLE：为新进程分配独立控制台窗口
 const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
 
-/// 打开"服务环境终端"
-///
-/// `shell`：终端宿主，"cmd"（默认）或 "powershell"。
-#[tauri::command]
-pub async fn open_service_terminal(
-    service_id: String,
-    shell: Option<String>,
-) -> Result<(), String> {
-    // 1. 取服务定义（service.list 含完整定义，无单独 get 方法）
+/// 服务环境上下文（调试终端与内嵌终端共用）
+pub(crate) struct ServiceEnvCtx {
+    pub name: String,
+    pub working_dir: Option<String>,
+    pub env_vars: Vec<(String, String)>,
+}
+
+/// 取服务定义中的名称/工作目录/环境变量（service.list 含完整定义，无单独 get 方法）
+pub(crate) async fn fetch_service_env(service_id: &str) -> Result<ServiceEnvCtx, String> {
     let v = DaemonConnection::call(Method::ServiceList, None)
         .await
         .map_err(|e| e.message)?;
@@ -35,37 +35,54 @@ pub async fn open_service_terminal(
             item.get("service")
                 .and_then(|s| s.get("id"))
                 .and_then(|id| id.as_str())
-                == Some(service_id.as_str())
+                == Some(service_id)
         })
         .ok_or_else(|| format!("服务不存在: {service_id}"))?
         .get("service")
         .ok_or_else(|| "service.list 响应格式无效".to_string())?
         .clone();
 
-    let name = def
-        .get("name")
-        .and_then(|n| n.as_str())
-        .unwrap_or("服务")
-        .to_string();
-    let working_dir = def
-        .get("working_dir")
-        .map(|w| w.as_str().map(|s| s.to_string()))
-        .unwrap_or(None);
-    let env_vars: Vec<(String, String)> = def
-        .get("env")
-        .and_then(|e| e.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|item| {
-                    let name = item.get("name")?.as_str()?.to_string();
-                    let value = item.get("value")?.as_str()?.to_string();
-                    Some((name, value))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    Ok(ServiceEnvCtx {
+        name: def
+            .get("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("服务")
+            .to_string(),
+        working_dir: def
+            .get("working_dir")
+            .map(|w| w.as_str().map(|s| s.to_string()))
+            .unwrap_or(None),
+        env_vars: def
+            .get("env")
+            .and_then(|e| e.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|item| {
+                        let name = item.get("name")?.as_str()?.to_string();
+                        let value = item.get("value")?.as_str()?.to_string();
+                        Some((name, value))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    })
+}
 
-    spawn_terminal(shell.as_deref(), &name, working_dir.as_deref(), &env_vars)
+/// 打开"服务环境终端"
+///
+/// `shell`：终端宿主，"cmd"（默认）或 "powershell"。
+#[tauri::command]
+pub async fn open_service_terminal(
+    service_id: String,
+    shell: Option<String>,
+) -> Result<(), String> {
+    let ctx = fetch_service_env(&service_id).await?;
+    spawn_terminal(
+        shell.as_deref(),
+        &ctx.name,
+        ctx.working_dir.as_deref(),
+        &ctx.env_vars,
+    )
 }
 
 /// 组装并拉起终端进程（独立函数便于测试参数组装）
@@ -147,7 +164,7 @@ fn wrap_windows_terminal(
 }
 
 /// 终端宿主 → (程序, 参数)；标题用于窗口识别
-fn shell_command(shell: Option<&str>, title: &str) -> (String, Vec<String>) {
+pub(crate) fn shell_command(shell: Option<&str>, title: &str) -> (String, Vec<String>) {
     match shell {
         Some("powershell") => (
             "powershell.exe".into(),
@@ -167,7 +184,7 @@ fn shell_command(shell: Option<&str>, title: &str) -> (String, Vec<String>) {
 }
 
 /// 服务环境变量 → 进程环境覆盖（展开 `%VAR%` 引用；变量名为空则跳过）
-fn build_env_overrides(env_vars: &[(String, String)]) -> Vec<(String, String)> {
+pub(crate) fn build_env_overrides(env_vars: &[(String, String)]) -> Vec<(String, String)> {
     env_vars
         .iter()
         .filter(|(name, _)| !name.is_empty())
@@ -176,7 +193,7 @@ fn build_env_overrides(env_vars: &[(String, String)]) -> Vec<(String, String)> {
 }
 
 /// 展开 `%VAR%` 形式的环境变量引用（可出现多次；未定义的保留原样）
-fn expand_percent(input: &str) -> String {
+pub(crate) fn expand_percent(input: &str) -> String {
     let system: HashMap<String, String> = std::env::vars().collect();
     expand_percent_with(input, &system)
 }

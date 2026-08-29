@@ -12,6 +12,7 @@ import {
   FileTerminal,
   TerminalSquare,
   Stethoscope,
+  AppWindow,
   Copy,
   X,
 } from "lucide-react";
@@ -276,6 +277,13 @@ export function ServiceList() {
                   >
                     <TerminalSquare size={15} aria-hidden />
                   </IconBtn>
+                  <Link
+                    to={`/terminal/${row.service.id}`}
+                    aria-label={`打开 ${row.service.name} 内嵌终端`}
+                    className="inline-flex size-9 items-center justify-center rounded-lg text-muted hover:bg-surface-3 hover:text-content"
+                  >
+                    <AppWindow size={15} aria-hidden />
+                  </Link>
                   <IconBtn
                     label={`克隆 ${row.service.name}`}
                     onClick={() => setCloning(row)}

@@ -7,6 +7,7 @@ pub mod autostart;
 pub mod commands;
 pub mod connection;
 pub mod events;
+pub mod pty;
 pub mod terminal;
 pub mod tray;
 pub mod watchdog;

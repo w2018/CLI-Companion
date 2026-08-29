@@ -35,7 +35,11 @@ fn main() {
             gui_core::commands::write_text_file,
             gui_core::terminal::open_service_terminal,
             gui_core::watchdog::get_watchdog_enabled,
-            gui_core::watchdog::set_watchdog_enabled
+            gui_core::watchdog::set_watchdog_enabled,
+            gui_core::pty::pty_open,
+            gui_core::pty::pty_write_cmd,
+            gui_core::pty::pty_resize_cmd,
+            gui_core::pty::pty_close_cmd
         ])
         .setup(|app| {
             // 开机自启：首次使用写入默认模式（登录后自动启动 daemon），
