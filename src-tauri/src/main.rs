@@ -37,6 +37,7 @@ fn main() {
             gui_core::watchdog::get_watchdog_enabled,
             gui_core::watchdog::set_watchdog_enabled,
             gui_core::pty::pty_open,
+            gui_core::pty::pty_attach,
             gui_core::pty::pty_write_cmd,
             gui_core::pty::pty_resize_cmd,
             gui_core::pty::pty_close_cmd

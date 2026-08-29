@@ -1,7 +1,7 @@
 // v2.2.0 任务9：内嵌终端（xterm.js + daemon ConPTY）
 // 会话链路：xterm onData → pty_write → PTY；PTY 输出 → pty-output:<id> → xterm
 import { useEffect, useRef, useState } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useNavigate, useParams, Link } from "react-router-dom";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { ArrowLeft, X } from "lucide-react";
@@ -11,6 +11,7 @@ import { useServices } from "../../shared/hooks/useDaemon";
 
 export function EmbeddedTerminal() {
   const { serviceId = "" } = useParams();
+  const navigate = useNavigate();
   const services = useServices();
   const serviceName = services.data?.find((r) => r.service.id === serviceId)?.service.name ?? "";
   const boxRef = useRef<HTMLDivElement>(null);
@@ -40,9 +41,20 @@ export function EmbeddedTerminal() {
     }
 
     (async () => {
-      const id = await invoke<number>("pty_open", { serviceId });
+      // v2.2.0 会话保持：先找该服务既有的 PTY 会话（返回即回放缓冲恢复屏幕）；
+      // 没有才新开。离开页面只会"断开"不会关闭会话。
+      const existing = await invoke<{ id: number; backlog: string } | null>("pty_attach", {
+        serviceId,
+      });
+      let id: number;
+      if (existing) {
+        id = existing.id;
+        term.write(existing.backlog);
+      } else {
+        id = await invoke<number>("pty_open", { serviceId });
+      }
       if (disposed) {
-        void invoke("pty_close", { id });
+        // 会话保留（不关闭），下次进入可继续
         return;
       }
       ptyIdRef.current = id;
@@ -87,13 +99,23 @@ export function EmbeddedTerminal() {
     return () => {
       disposed = true;
       unsubs.forEach((f) => f());
-      if (ptyIdRef.current != null) {
-        void invoke("pty_close_cmd", { id: ptyIdRef.current });
-        ptyIdRef.current = null;
-      }
+      // 会话保持：卸载只断开 UI，不终止 PTY；仅「关闭会话」按钮会真正关闭
       term.dispose();
     };
   }, [serviceId]);
+
+  /** 主动关闭会话（终止 PTY 并清空），返回服务列表 */
+  const closeSession = async () => {
+    if (ptyIdRef.current != null) {
+      try {
+        await invoke("pty_close_cmd", { id: ptyIdRef.current });
+      } catch {
+        // 会话可能已随子进程退出被清理
+      }
+      ptyIdRef.current = null;
+    }
+    navigate("/services");
+  };
 
   return (
     <div className="mx-auto flex h-[calc(100vh-96px)] max-w-6xl flex-col gap-3">
@@ -109,12 +131,14 @@ export function EmbeddedTerminal() {
           内嵌终端{serviceName ? ` · ${serviceName}` : ""}
         </h1>
         <span className="text-xs text-muted">
-          {ready ? "已连接（环境变量与工作目录同服务配置）" : "连接中…"}
+          {ready
+            ? "已连接 · 返回页面会话保持，重新进入继续"
+            : "连接中…"}
         </span>
         {ready && (
           <button
-            onClick={() => window.history.back()}
-            className="ml-auto inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-surface-3 px-3 text-xs hover:bg-surface-3"
+            onClick={() => void closeSession()}
+            className="ml-auto inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-err/40 px-3 text-xs text-err hover:bg-err/10"
           >
             <X size={13} aria-hidden /> 关闭会话
           </button>
@@ -133,7 +157,8 @@ export function EmbeddedTerminal() {
         className="min-h-0 flex-1 overflow-hidden rounded-xl border border-surface-3 bg-[#101418] p-2"
       />
       <p className="text-xs text-muted">
-        会话在本机以服务配置的环境变量与工作目录运行；关闭页面即结束会话，不影响服务运行状态。
+        会话在本机以服务配置的环境变量与工作目录运行；返回或切换页面时终端会话保持（重新进入继续），
+        仅点击「关闭会话」才会终止并重置。
       </p>
     </div>
   );
