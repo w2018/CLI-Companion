@@ -70,11 +70,17 @@ pub fn spawn_pty(
     if let Some(cwd) = &cfg.cwd {
         cmd.cwd(cwd);
     }
-    let child = slave.spawn_command(cmd).map_err(|e| format!("启动终端失败: {e}"))?;
+    let child = slave
+        .spawn_command(cmd)
+        .map_err(|e| format!("启动终端失败: {e}"))?;
     drop(slave); // slave 用完即弃：子进程持有其端
 
-    let mut reader = master.try_clone_reader().map_err(|e| format!("接管输出失败: {e}"))?;
-    let writer = master.take_writer().map_err(|e| format!("接管输入失败: {e}"))?;
+    let mut reader = master
+        .try_clone_reader()
+        .map_err(|e| format!("接管输出失败: {e}"))?;
+    let writer = master
+        .take_writer()
+        .map_err(|e| format!("接管输入失败: {e}"))?;
     let killer = child.clone_killer();
 
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
@@ -99,7 +105,14 @@ pub fn spawn_pty(
         .lock()
         .unwrap()
         .get_or_insert_with(HashMap::new)
-        .insert(id, PtySession { master, writer, killer });
+        .insert(
+            id,
+            PtySession {
+                master,
+                writer,
+                killer,
+            },
+        );
     Ok(id)
 }
 
@@ -107,8 +120,12 @@ pub fn spawn_pty(
 fn pty_write(id: u64, data: &str) -> Result<(), String> {
     let mut map = SESSIONS.lock().unwrap();
     let map = map.as_mut().ok_or("PTY 表不可用")?;
-    let s = map.get_mut(&id).ok_or_else(|| format!("会话不存在: {id}"))?;
-    s.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+    let s = map
+        .get_mut(&id)
+        .ok_or_else(|| format!("会话不存在: {id}"))?;
+    s.writer
+        .write_all(data.as_bytes())
+        .map_err(|e| e.to_string())?;
     s.writer.flush().map_err(|e| e.to_string())
 }
 
@@ -116,7 +133,9 @@ fn pty_write(id: u64, data: &str) -> Result<(), String> {
 fn pty_resize(id: u64, rows: u16, cols: u16) -> Result<(), String> {
     let mut map = SESSIONS.lock().unwrap();
     let map = map.as_mut().ok_or("PTY 表不可用")?;
-    let s = map.get_mut(&id).ok_or_else(|| format!("会话不存在: {id}"))?;
+    let s = map
+        .get_mut(&id)
+        .ok_or_else(|| format!("会话不存在: {id}"))?;
     s.master
         .resize(PtySize {
             rows,
@@ -140,7 +159,11 @@ fn pty_close(id: u64) -> Result<(), String> {
 
 /// 打开内嵌终端：返回会话 ID；输出事件 `pty-output:<id>`，结束事件 `pty-exit:<id>`
 #[tauri::command]
-pub async fn pty_open(app: tauri::AppHandle, service_id: String, shell: Option<String>) -> Result<u64, String> {
+pub async fn pty_open(
+    app: tauri::AppHandle,
+    service_id: String,
+    shell: Option<String>,
+) -> Result<u64, String> {
     let ctx = fetch_service_env(&service_id).await?;
     let (program, args) = shell_command(shell.as_deref(), "CLI Companion");
     let cwd = ctx
