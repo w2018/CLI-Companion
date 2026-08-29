@@ -173,16 +173,19 @@ function ServiceOverviewRow({
         ) : (
           <StatusBadge status={row.runtime.status} />
         )}
-        {isRunning && metric && (metric.cpu_percent != null || metric.mem_bytes != null) && (
-          <span className="ml-auto inline-flex items-center gap-1 font-mono text-xs text-muted">
-            {metric.cpu_percent != null && <>CPU {metric.cpu_percent.toFixed(1)}% · </>}
-            {metric.mem_bytes != null && <>内存 {formatBytes(metric.mem_bytes)}</>}
-          </span>
-        )}
-        {isRunning && (!metric || (metric.cpu_percent == null && metric.mem_bytes == null)) && (
-          <span className="ml-auto inline-flex items-center gap-1 text-xs text-ok">
-            <Clock size={12} aria-hidden />
-            已运行 {formatDuration(row.runtime.started_at)}
+        {/* 运行中：资源指标与运行时长并排展示（指标未就绪时只显示时长） */}
+        {isRunning && (
+          <span className="ml-auto inline-flex items-center gap-3">
+            {metric && (metric.cpu_percent != null || metric.mem_bytes != null) && (
+              <span className="font-mono text-xs text-muted">
+                {metric.cpu_percent != null && <>CPU {metric.cpu_percent.toFixed(1)}% · </>}
+                {metric.mem_bytes != null && <>内存 {formatBytes(metric.mem_bytes)}</>}
+              </span>
+            )}
+            <span className="inline-flex items-center gap-1 text-xs text-ok">
+              <Clock size={12} aria-hidden />
+              已运行 {formatDuration(row.runtime.started_at)}
+            </span>
           </span>
         )}
       </div>

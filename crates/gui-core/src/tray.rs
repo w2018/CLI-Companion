@@ -33,6 +33,30 @@ pub fn schedule_rebuild(app: &AppHandle) {
     });
 }
 
+/// 异步重建并重试：GUI 启动初期 daemon 可能尚未就绪（首次拉起需数秒），
+/// 每 3 秒重试直至成功或达上限，保证"服务"子菜单最终一定出现
+pub fn schedule_rebuild_with_retry(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        for attempt in 0..20u32 {
+            match rebuild(&app).await {
+                Ok(()) => return,
+                Err(e) if attempt == 19 => {
+                    tracing::warn!("托盘服务菜单初始化失败（重试耗尽）: {e}");
+                }
+                Err(e) => tracing::debug!("托盘菜单初始化重试中: {e}"),
+            }
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
+    });
+}
+
+/// 初始托盘菜单（setup 阶段使用）：服务入口始终存在，daemon 就绪后由
+/// schedule_rebuild 换成真实服务列表
+pub fn build_initial_menu(app: &AppHandle) -> Result<Menu<Wry>, String> {
+    build_menu(app, &[])
+}
+
 /// 托盘菜单点击：执行服务启停并刷新菜单
 ///
 /// `action`：start | stop；`service_id`：服务 UUID 字符串。

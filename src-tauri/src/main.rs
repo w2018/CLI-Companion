@@ -9,7 +9,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use tauri::{
-    menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager,
 };
@@ -43,8 +42,8 @@ fn main() {
             // daemon 事件流订阅转发：管道长连接 → "daemon-event" Tauri 事件
             gui_core::events::spawn(app.handle().clone());
             setup_tray(app)?;
-            // 托盘"服务"子菜单：按 daemon 当前服务列表初始化（失败静默）
-            gui_core::tray::schedule_rebuild(app.handle());
+            // 托盘"服务"子菜单初始化：daemon 未就绪时每 3s 重试，就绪后由事件驱动刷新
+            gui_core::tray::schedule_rebuild_with_retry(app.handle());
             Ok(())
         })
         // 关闭行为完全由前端 onCloseRequested 处理（托盘隐藏 / 弹窗确认退出）。
@@ -78,23 +77,11 @@ fn install_panic_logger() {
 }
 
 /// 创建系统托盘（右键弹菜单；左键单击切换窗口显隐）
+///
+/// 初始菜单由 gui-core::tray 提供：服务子菜单占位（"暂无服务"），daemon 就绪后
+/// 由事件流连接/服务事件触发重建为真实服务列表——入口任何时候都可见。
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
-    let quit_gui = MenuItem::with_id(
-        app,
-        "quit_gui",
-        "退出 GUI（服务保持运行）",
-        true,
-        None::<&str>,
-    )?;
-    let quit_all = MenuItem::with_id(
-        app,
-        "quit_all",
-        "完全退出（停止全部服务）",
-        true,
-        None::<&str>,
-    )?;
-    let menu = Menu::with_items(app, &[&show, &quit_gui, &quit_all])?;
+    let menu = gui_core::tray::build_initial_menu(app.handle())?;
 
     let mut builder = TrayIconBuilder::with_id("main-tray")
         .menu(&menu)

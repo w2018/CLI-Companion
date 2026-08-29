@@ -41,6 +41,8 @@ async fn run_once(app: &tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     resp.into_result().map_err(|e| e.to_string())?;
     tracing::info!("事件流已连接");
+    // daemon 确认可达：立即刷新托盘"服务"子菜单（启动初期首次重建可能因 daemon 未就绪而失败）
+    crate::tray::schedule_rebuild(app);
     loop {
         let ev: cli_companion_protocol::Event = codec::read_frame(&mut pipe)
             .await
