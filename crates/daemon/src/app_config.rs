@@ -90,6 +90,8 @@ impl Default for WebdavSettings {
 pub struct Secrets {
     /// WebDAV 密码，"dpapi:<hex>" 格式
     pub webdav_password_dpapi: Option<String>,
+    /// v2.2.0：机密环境变量（键 `svc:<service_id>:<env_name>`，值 "dpapi:<hex>"）
+    pub env_secrets: std::collections::BTreeMap<String, String>,
 }
 
 impl Secrets {

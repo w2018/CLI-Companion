@@ -46,6 +46,9 @@ pub struct ServiceDefinition {
     pub health: HealthConfig,
     #[serde(default)]
     pub restart: RestartConfig,
+    /// 内存告警阈值（MB）：进程树内存超过该值发通知；None = 关闭
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mem_alert_mb: Option<u32>,
     #[serde(default)]
     pub labels: Vec<String>,
     pub created_at: DateTime<Utc>,
@@ -208,6 +211,8 @@ pub enum HealthKind {
     Tcp { host: String, port: u16 },
     /// HTTP /health 探活
     Http { url: String },
+    /// 自定义命令探活：退出码 0 = 健康（序列化 {"command":{"program":...,"args":[...]}}）
+    Command { program: String, args: Vec<String> },
 }
 
 /// 重启策略
@@ -280,6 +285,7 @@ impl ServiceDefinition {
             stop: StopConfig::default(),
             health: HealthConfig::default(),
             restart: RestartConfig::default(),
+            mem_alert_mb: None,
             labels: Vec::new(),
             created_at: now,
             updated_at: now,

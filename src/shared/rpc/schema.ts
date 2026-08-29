@@ -64,6 +64,8 @@ export const ServiceDefinitionSchema = z.object({
       multiplier: z.number(),
     }),
   }),
+  // v2.2.0：内存告警阈值（MB），None = 关闭
+  mem_alert_mb: z.number().optional().nullable(),
   labels: z.array(z.string()),
   created_at: z.string(),
   updated_at: z.string(),

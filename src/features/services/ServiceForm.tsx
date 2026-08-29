@@ -17,6 +17,7 @@ import {
 import { describeError } from "../../shared/rpc/errors";
 import { useUiStore } from "../../stores/uiStore";
 import { ArgsEditor } from "./ArgsEditor";
+import { parseCommandLine } from "../../shared/utils/parseCommandLine";
 
 interface Props {
   initial: ServiceDefinition | null;
@@ -88,6 +89,39 @@ export function ServiceForm({ initial, onClose }: Props) {
       pushToast("ok", "完整命令行已复制");
     } catch {
       pushToast("err", "复制失败，请手动选择文本复制");
+    }
+  };
+
+  /** v2.2.0 任务1：粘贴整条命令行 → 解析填充 exe 与参数编辑器 */
+  const [pasteInput, setPasteInput] = useState("");
+  const applyPastedCommand = () => {
+    const parsed = parseCommandLine(pasteInput.trim());
+    if (!parsed) {
+      pushToast("err", "命令行为空或无法解析");
+      return;
+    }
+    const fill = () => {
+      setSvc((s) => ({
+        ...s,
+        exe: parsed.exe,
+        args: parsed.args.map((a) => ({
+          id: crypto.randomUUID(),
+          key: a.key,
+          value: a.value,
+          enabled: true,
+          kind: a.kind,
+          description: "",
+        })),
+        // 工作目录跟随新 exe 所在目录（留空时）
+        ...(dirOf(parsed.exe) && !s.working_dir ? { working_dir: dirOf(parsed.exe) } : {}),
+      }));
+      setPasteInput("");
+      pushToast("ok", `已解析：exe + ${parsed.args.length} 个参数，可继续微调`);
+    };
+    if (svc.exe || svc.args.length > 0) {
+      if (window.confirm("粘贴解析将覆盖当前 exe 与全部参数，确定吗？")) fill();
+    } else {
+      fill();
     }
   };
 
@@ -170,6 +204,32 @@ export function ServiceForm({ initial, onClose }: Props) {
             <legend className="text-xs font-semibold uppercase tracking-wide text-muted">
               身份与运行
             </legend>
+
+            {/* v2.2.0 任务1：粘贴整条命令行一键填充 */}
+            <Field label="从命令行粘贴（自动解析 exe 与参数）">
+              <div className="flex gap-2">
+                <input
+                  className={`${inputCls} flex-1 font-mono text-xs`}
+                  value={pasteInput}
+                  onChange={(e) => setPasteInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      applyPastedCommand();
+                    }
+                  }}
+                  placeholder='如：java -Xms512m -jar app.jar --port 8080'
+                />
+                <button
+                  type="button"
+                  onClick={applyPastedCommand}
+                  disabled={!pasteInput.trim()}
+                  className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-lg border border-accent/40 px-3 text-xs text-accent hover:bg-accent/10 disabled:opacity-40"
+                >
+                  解析填充
+                </button>
+              </div>
+            </Field>
 
             {/* exe 路径：手动输入 或 文件选择 */}
             <Field label="exe 路径 *">

@@ -207,7 +207,8 @@ async fn 管道rpc全链路与服务生命周期() {
 
     // ===== 8. config.get 往返 =====
     let cfg = rpc_call(Method::ConfigGet, None).await.unwrap();
-    assert_eq!(cfg["services"]["version"], json!(1));
+    // v2.2.0 起 schema 版本为 2（新增 mem_alert_mb / HealthKind::Command）
+    assert_eq!(cfg["services"]["version"], json!(2));
 
     // ===== 9. config.export / config.import 往返 =====
     let exported = rpc_call(Method::ConfigExport, None).await.unwrap();

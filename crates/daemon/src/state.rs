@@ -46,6 +46,8 @@ impl AppState {
     /// 保存 services.json 并同步 actor 表
     pub async fn save_services(&self, cfg: ServicesConfig) -> Result<(), String> {
         cfg.validate().map_err(|e| e.to_string())?;
+        // v2.2.0：写盘前快照当前配置（自动备份，失败不影响保存）
+        crate::backup::snapshot_before_save(&self.dirs);
         let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
         atomic_write(&self.dirs.services_json(), &json).map_err(|e| e.to_string())?;
         let mut store = self.config.lock().await;
@@ -177,7 +179,8 @@ pub async fn bootstrap(
         dirs,
     };
 
-    // 5. 恢复 autostart 服务
+    // 5. 恢复 autostart 服务（先做一次明文机密迁移，幂等）
+    crate::secrets_env::migrate_existing(&state).await;
     state.startup_autostart().await;
 
     // 6. WebDAV 周期同步调度

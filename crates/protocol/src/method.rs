@@ -65,6 +65,18 @@ pub enum Method {
     // 事件
     #[serde(rename = "event.subscribe")]
     EventSubscribe,
+
+    // 备份（v2.2.0）
+    #[serde(rename = "backup.list")]
+    BackupList,
+    #[serde(rename = "backup.restore")]
+    BackupRestore,
+
+    // 崩溃诊断（v2.2.0）
+    #[serde(rename = "crashreport.list")]
+    CrashReportList,
+    #[serde(rename = "crashreport.get")]
+    CrashReportGet,
 }
 
 impl Method {
@@ -95,6 +107,10 @@ impl Method {
             Method::SyncUnlock => "sync.unlock",
             Method::SyncTest => "sync.test",
             Method::EventSubscribe => "event.subscribe",
+            Method::BackupList => "backup.list",
+            Method::BackupRestore => "backup.restore",
+            Method::CrashReportList => "crashreport.list",
+            Method::CrashReportGet => "crashreport.get",
         }
     }
 }
@@ -131,6 +147,10 @@ mod tests {
             Method::SyncUnlock,
             Method::SyncTest,
             Method::EventSubscribe,
+            Method::BackupList,
+            Method::BackupRestore,
+            Method::CrashReportList,
+            Method::CrashReportGet,
         ];
         for m in all {
             let s = serde_json::to_value(m).unwrap();

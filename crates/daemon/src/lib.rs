@@ -2,12 +2,15 @@
 
 pub mod actor;
 pub mod app_config;
+pub mod backup;
+pub mod crashreport;
 pub mod dirs;
 pub mod events;
 pub mod manager;
 pub mod metrics;
 pub mod notify;
 pub mod rpc;
+pub mod secrets_env;
 pub mod service;
 pub mod state;
 pub mod sync;

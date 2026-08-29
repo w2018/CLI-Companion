@@ -29,6 +29,10 @@ export type MethodName =
   | "sync.status"
   | "sync.run_now"
   | "sync.test"
+  | "backup.list"
+  | "backup.restore"
+  | "crashreport.list"
+  | "crashreport.get"
   | "event.subscribe";
 
 /** 解析 Rust 侧返回的错误字符串（RpcError 的 JSON 序列化） */

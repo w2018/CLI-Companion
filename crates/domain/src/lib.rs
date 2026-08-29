@@ -19,5 +19,5 @@ pub use service::{
     RestartConfig, RestartPolicy, RunAs, ServiceDefinition, ServiceId, StopConfig, WindowStartup,
 };
 
-/// 当前配置 schema 版本
-pub const SCHEMA_VERSION: u32 = 1;
+/// 当前配置 schema 版本（v2：+mem_alert_mb、HealthKind::Command；旧版本经迁移补齐）
+pub const SCHEMA_VERSION: u32 = 2;

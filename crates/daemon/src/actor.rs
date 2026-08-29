@@ -171,6 +171,8 @@ impl Actor {
                                 "CLI 服务已崩溃",
                                 &format!("{}：进程意外退出（退出码 {code}）", self.def_name()),
                             );
+                            // v2.2.0：归档崩溃诊断（脱敏，失败只记日志）
+                            self.write_crash_report(code);
                             // 按策略尝试自动重启（熔断器 + 退避等待均满足才启动）
                             if let Some(def) = self.current_def.clone() {
                                 if self.should_auto_restart(&def) && self.wait_backoff(&def).await {
@@ -259,7 +261,13 @@ impl Actor {
             cmd.current_dir(wd);
         }
         for e in &def.env {
-            cmd.env(&e.name, &e.value);
+            // v2.2.0：机密占位符 → 从加密存储解密注入真实值
+            let value = if e.secret && e.value == crate::secrets_env::ENCRYPTED_PLACEHOLDER {
+                crate::secrets_env::load_secret(&self.dirs, &self.id, &e.name).unwrap_or_default()
+            } else {
+                e.value.clone()
+            };
+            cmd.env(&e.name, &value);
         }
         let flags = creation_flags(&def.console);
         #[cfg(windows)]
@@ -432,6 +440,42 @@ impl Actor {
             .as_ref()
             .map(|d| d.name.clone())
             .unwrap_or_else(|| self.id.to_string())
+    }
+
+    /// 崩溃诊断归档（v2.2.0）
+    ///
+    /// 脱敏原则：定义快照只含名称/exe/参数/目录等，环境变量仅记名称与机密
+    /// 标记、绝不落值；写入失败不影响崩溃自动重启主流程。
+    fn write_crash_report(&self, code: i32) {
+        let Some(def) = &self.current_def else { return };
+        let def_json = serde_json::json!({
+            "name": def.name,
+            "exe": def.exe.display().to_string(),
+            "args": def.args,
+            "working_dir": def.working_dir.as_ref().map(|p| p.display().to_string()),
+            "console": def.console,
+            "restart_policy": def.restart.policy,
+            "env_names": def
+                .env
+                .iter()
+                .map(|e| serde_json::json!({"name": e.name, "secret": e.secret}))
+                .collect::<Vec<_>>(),
+        });
+        let log_tail = crate::crashreport::tail_of_file(
+            &self.dirs.service_log(&self.id.to_string()),
+            crate::crashreport::LOG_TAIL_LINES,
+        );
+        if let Err(e) = crate::crashreport::write_report(
+            &self.dirs,
+            &self.id.to_string(),
+            &def.name,
+            code,
+            &Utc::now().to_rfc3339(),
+            def_json,
+            &log_tail,
+        ) {
+            tracing::warn!(service = %self.id, "崩溃诊断归档失败: {e}");
+        }
     }
 
     /// 熔断器 + 策略判断：是否允许自动重启

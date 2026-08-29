@@ -67,8 +67,14 @@ mod tests {
 
     #[test]
     fn 自身进程快照非零() {
+        // 先消耗一段 CPU：刚启动的进程累计时间可能仍为 0
+        let mut x = 1u64;
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_millis(30) {
+            x = x.wrapping_mul(6364136223846793005).wrapping_add(1);
+        }
+        std::hint::black_box(x);
         let snap = snapshot(std::process::id()).expect("读取自身进程指标应成功");
-        // 进程活着就必然有非零 CPU 时间与内存
         assert!(snap.cpu_time_100ns > 0);
         assert!(snap.working_set_bytes > 0);
     }

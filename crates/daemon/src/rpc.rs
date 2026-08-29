@@ -192,8 +192,8 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
         // ===== 配置导入导出 =====
         M::ConfigExport => {
             let store = state.config.lock().await;
-            // 注意：导出包含 services.json 中的环境变量值（与 WebDAV 同步范围一致），
-            // WebDAV 凭据（DPAPI 加密）不导出
+            // 导出 services.json 内容：v2.2.0 起机密环境变量为占位符（DPAPI 加密存
+            // 本机 secrets.json，不参与导出与同步），WebDAV 凭据同样不导出
             Ok(json!({
                 "exported_at": chrono::Utc::now().to_rfc3339(),
                 "app_version": env!("CARGO_PKG_VERSION"),
@@ -241,7 +241,13 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
         }
 
         M::ServiceCreate => {
-            let svc: ServiceDefinition = parse_service(&params)?;
+            let mut svc: ServiceDefinition = parse_service(&params)?;
+            // v2.2.0：机密环境变量转加密存储（失败即拒绝保存，避免明文落盘）
+            {
+                let sid = svc.id;
+                crate::secrets_env::sanitize_service_secrets(&state.dirs, &sid, &mut svc)
+            }
+            .map_err(validation)?;
             // 名称唯一性
             let mut cfg = state.services().await;
             if cfg.services.iter().any(|s| s.name == svc.name) {
@@ -261,7 +267,13 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
         }
 
         M::ServiceUpdate => {
-            let svc: ServiceDefinition = parse_service(&params)?;
+            let mut svc: ServiceDefinition = parse_service(&params)?;
+            // v2.2.0：机密环境变量转加密存储（失败即拒绝保存，避免明文落盘）
+            {
+                let sid = svc.id;
+                crate::secrets_env::sanitize_service_secrets(&state.dirs, &sid, &mut svc)
+            }
+            .map_err(validation)?;
             let mut cfg = state.services().await;
             let pos = cfg
                 .services
@@ -305,6 +317,8 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
             cfg.services.retain(|s| s.id != id);
             state.save_services(cfg).await.map_err(validation)?;
             state.manager.remove_actor(&id);
+            // v2.2.0：清理该服务的加密机密
+            crate::secrets_env::prune_service(&state.dirs, &id);
             state.emit(
                 event::EventTopic::ConfigChanged,
                 None,
@@ -403,6 +417,39 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
                 })
                 .collect();
             serde_json::to_value(MetricsResult { metrics }).map_err(|e| internal(e.to_string()))
+        }
+
+        // ===== 备份（v2.2.0） =====
+        M::BackupList => Ok(json!({ "backups": crate::backup::list(&state.dirs) })),
+
+        M::BackupRestore => {
+            let name = params
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| RpcError::new(error::ErrorCode::Validation, "缺少 name"))?;
+            let content = crate::backup::read(&state.dirs, name).map_err(validation)?;
+            let cfg = cli_companion_domain::ServicesConfig::from_json(&content)
+                .map_err(|e| RpcError::new(error::ErrorCode::Validation, e.to_string()))?;
+            let count = cfg.services.len();
+            state.save_services(cfg).await.map_err(validation)?;
+            state.emit(
+                event::EventTopic::ConfigChanged,
+                None,
+                json!({"source": "restore", "imported_services": count}),
+            );
+            Ok(json!({"ok": true, "imported_services": count}))
+        }
+
+        // ===== 崩溃诊断（v2.2.0） =====
+        M::CrashReportList => Ok(json!({ "reports": crate::crashreport::list(&state.dirs) })),
+
+        M::CrashReportGet => {
+            let name = params
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| RpcError::new(error::ErrorCode::Validation, "缺少 name"))?;
+            let report = crate::crashreport::get(&state.dirs, name).map_err(validation)?;
+            serde_json::to_value(report).map_err(|e| internal(e.to_string()))
         }
 
         // ===== daemon =====

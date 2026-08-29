@@ -127,7 +127,8 @@ mod tests {
     #[test]
     fn 示例配置可解析并校验通过() {
         let cfg = ServicesConfig::from_json(SAMPLE).unwrap();
-        assert_eq!(cfg.version, 1);
+        // v1 fixture 应被迁移到当前版本（仅补版本号）
+        assert_eq!(cfg.version, crate::SCHEMA_VERSION);
         assert_eq!(cfg.services.len(), 1);
         cfg.validate().unwrap();
         assert_eq!(cfg.services[0].name, "示例代理");

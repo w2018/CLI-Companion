@@ -111,6 +111,14 @@ impl DataDirs {
     pub fn daemon_lock(&self) -> PathBuf {
         self.data.join("daemon.lock")
     }
+    /// services.json 自动备份目录（v2.2.0）
+    pub fn backups(&self) -> PathBuf {
+        self.data.join("backups")
+    }
+    /// 服务崩溃诊断报告目录（v2.2.0）
+    pub fn crash_reports(&self) -> PathBuf {
+        self.data.join("crashreports")
+    }
     pub fn daemon_log(&self) -> PathBuf {
         self.logs.join("daemon.log")
     }

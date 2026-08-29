@@ -11,8 +11,11 @@ import {
   Plus,
   FileTerminal,
   TerminalSquare,
+  Stethoscope,
+  X,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { rpc } from "../../shared/rpc/client";
 import { useServices, useServiceAction, useServiceMetrics } from "../../shared/hooks/useDaemon";
 import { StatusBadge } from "../../shared/components/StatusBadge";
 import { EmptyState } from "../../shared/components/EmptyState";
@@ -41,6 +44,39 @@ export function ServiceList() {
     try {
       await invoke("open_service_terminal", { serviceId: row.service.id });
       pushToast("ok", `已打开「${row.service.name}」调试终端（含其环境变量与工作目录）`);
+    } catch (e) {
+      pushToast("err", describeError(e as never));
+    }
+  };
+
+  // v2.2.0 任务4：崩溃诊断查看（失败态服务行）
+  const [diag, setDiag] = useState<{
+    service: string;
+    exitCode: number;
+    info: Record<string, unknown>;
+    logTail: string;
+  } | null>(null);
+  const showDiag = async (row: ServiceRow) => {
+    try {
+      const { reports } = await rpc<{ reports: { name: string; service: string }[] }>(
+        "crashreport.list",
+      );
+      const rep = reports.find((r) => r.service === row.service.name);
+      if (!rep) {
+        pushToast("info", "暂无该服务的崩溃诊断记录");
+        return;
+      }
+      const detail = await rpc<{ info: Record<string, unknown>; log_tail: string }>(
+        "crashreport.get",
+        { name: rep.name },
+      );
+      const info = detail.info as { service?: string; exit_code?: number };
+      setDiag({
+        service: info.service ?? row.service.name,
+        exitCode: info.exit_code ?? 0,
+        info: detail.info,
+        logTail: detail.log_tail,
+      });
     } catch (e) {
       pushToast("err", describeError(e as never));
     }
@@ -138,6 +174,14 @@ export function ServiceList() {
                   )}
                 </div>
                 <StatusBadge status={row.runtime.status} />
+                {row.runtime.status === "failed" && (
+                  <button
+                    onClick={() => void showDiag(row)}
+                    className="inline-flex min-h-8 items-center gap-1 rounded-md border border-warn/40 px-2 text-xs text-warn hover:bg-warn/10"
+                  >
+                    <Stethoscope size={13} aria-hidden /> 诊断
+                  </button>
+                )}
                 <div className="flex items-center gap-1">
                   {row.runtime.status !== "running" ? (
                     <IconBtn
@@ -212,6 +256,39 @@ export function ServiceList() {
             setEditing(null);
           }}
         />
+      )}
+
+      {/* v2.2.0 任务4：崩溃诊断弹窗 */}
+      {diag && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`崩溃诊断 ${diag.service}`}
+          className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-6"
+          onClick={() => setDiag(null)}
+        >
+          <div
+            className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-surface-3 bg-surface-2 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="flex items-center justify-between border-b border-surface-3 px-5 py-3">
+              <h2 className="text-base font-semibold">
+                崩溃诊断 · {diag.service}（退出码 {diag.exitCode}）
+              </h2>
+              <button
+                aria-label="关闭诊断"
+                onClick={() => setDiag(null)}
+                className="inline-flex size-8 items-center justify-center rounded-lg text-muted hover:bg-surface-3 hover:text-content"
+              >
+                <X size={16} aria-hidden />
+              </button>
+            </header>
+            <pre className="flex-1 overflow-auto whitespace-pre-wrap p-4 font-mono text-xs leading-5">
+              {JSON.stringify(diag.info, null, 2)}
+              {diag.logTail ? `\n\n===== 日志末尾 =====\n${diag.logTail}` : ""}
+            </pre>
+          </div>
+        </div>
       )}
 
       {/* 删除二次确认 */}

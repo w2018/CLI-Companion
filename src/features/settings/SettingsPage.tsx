@@ -137,8 +137,7 @@ export function SettingsPage() {
     }
   };
 
-  const runSync = async (method: "sync.run_now" | "sync.test") => {
-    setBusy(true);
+  const runSync = async (method: "sync.run_now" | "sync.test") => {    setBusy(true);
     try {
       if (method === "sync.run_now") {
         // 先保存设置（含密码）再手动同步
@@ -151,6 +150,23 @@ export function SettingsPage() {
       pushToast("err", describeError(e as never));
     } finally {
       setBusy(false);
+    }
+  };
+
+  // v2.2.0 任务2：自动备份历史与一键回滚
+  const backups = useQuery({
+    queryKey: ["backups"],
+    queryFn: () =>
+      rpc<{ backups: { name: string; ts: string; size: number }[] }>("backup.list"),
+  });
+  const restoreBackup = async (name: string) => {
+    if (!window.confirm("确定回滚到该备份吗？回滚前会把当前配置再自动备份一份。")) return;
+    try {
+      await rpc("backup.restore", { name });
+      pushToast("ok", "已回滚到所选备份");
+      void qc.invalidateQueries();
+    } catch (e) {
+      pushToast("err", describeError(e as never));
     }
   };
 
@@ -429,6 +445,31 @@ export function SettingsPage() {
             导入配置…
           </button>
         </div>
+
+        {/* v2.2.0 任务2：自动备份历史（每次保存前快照，保留最近 20 份） */}
+        {backups.data && backups.data.backups.length > 0 && (
+          <div className="space-y-1.5 rounded-lg border border-surface-3 p-3">
+            <p className="text-xs text-muted">
+              自动备份（每次保存前生成，保留最近 20 份；回滚前会把当前配置再备份一份）
+            </p>
+            <ul className="max-h-44 space-y-1 overflow-y-auto">
+              {backups.data.backups.map((b) => (
+                <li key={b.name} className="flex items-center justify-between gap-3 text-xs">
+                  <span className="font-mono text-muted">
+                    {formatDateTime(b.ts)} · {(b.size / 1024).toFixed(1)} KB
+                  </span>
+                  <button
+                    onClick={() => void restoreBackup(b.name)}
+                    disabled={busy}
+                    className="shrink-0 rounded-md border border-surface-3 px-2 py-0.5 text-accent hover:bg-accent/10 disabled:opacity-40"
+                  >
+                    回滚
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </Section>
 
       {/* ===== daemon ===== */}
