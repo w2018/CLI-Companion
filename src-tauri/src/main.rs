@@ -33,7 +33,9 @@ fn main() {
             gui_core::commands::exit_app,
             gui_core::commands::read_text_file,
             gui_core::commands::write_text_file,
-            gui_core::terminal::open_service_terminal
+            gui_core::terminal::open_service_terminal,
+            gui_core::watchdog::get_watchdog_enabled,
+            gui_core::watchdog::set_watchdog_enabled
         ])
         .setup(|app| {
             // 开机自启：首次使用写入默认模式（登录后自动启动 daemon），

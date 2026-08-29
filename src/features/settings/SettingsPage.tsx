@@ -63,6 +63,28 @@ export function SettingsPage() {
     }
   };
 
+  // ===== v2.2.0 任务8：daemon 看门狗（当前用户计划任务，每 5 分钟检查拉起） =====
+  const watchdog = useQuery({
+    queryKey: ["watchdog"],
+    queryFn: () => invoke<boolean>("get_watchdog_enabled"),
+  });
+  const [watchdogBusy, setWatchdogBusy] = useState(false);
+  const changeWatchdog = async (enabled: boolean) => {
+    setWatchdogBusy(true);
+    try {
+      await invoke("set_watchdog_enabled", { enabled });
+      pushToast(
+        "ok",
+        enabled ? "看门狗已启用（每 5 分钟自动检查）" : "看门狗已关闭",
+      );
+      void qc.invalidateQueries({ queryKey: ["watchdog"] });
+    } catch (e) {
+      pushToast("err", describeError(e as never));
+    } finally {
+      setWatchdogBusy(false);
+    }
+  };
+
   // ===== daemon 启停 =====
   const { state: daemonState } = useDaemonConnection();
   const startDaemon = async () => {
@@ -295,6 +317,22 @@ export function SettingsPage() {
             <p className="mt-1 text-xs text-muted">
               服务崩溃、自动重启失败或触发熔断时弹出 Windows 系统通知（关闭 GUI 也能收到；
               以 Windows 服务模式运行时不可用）
+            </p>
+          </div>
+        </Row>
+        {/* v2.2.0 任务8：daemon 看门狗 */}
+        <Row label="daemon 看门狗">
+          <div>
+            <input
+              type="checkbox"
+              className="size-4 accent-[rgb(var(--accent))]"
+              disabled={watchdogBusy || watchdog.isPending}
+              checked={watchdog.data ?? false}
+              onChange={(e) => void changeWatchdog(e.target.checked)}
+            />
+            <p className="mt-1 text-xs text-muted">
+              每 5 分钟自动检查 daemon，未运行则静默拉起（当前用户 Windows
+              计划任务，无需管理员；默认关闭）
             </p>
           </div>
         </Row>

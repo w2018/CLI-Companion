@@ -15,3 +15,4 @@ pub mod secrets_env;
 pub mod service;
 pub mod state;
 pub mod sync;
+pub mod watchdog;

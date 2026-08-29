@@ -37,6 +37,13 @@ fn main() {
         return;
     }
 
+    // v2.2.0：看门狗心跳（计划任务每 5 分钟调用）——可达即退出，否则静默拉起后退出
+    if args.iter().any(|a| a == "--watchdog-check") {
+        let rt = tokio::runtime::Runtime::new().expect("创建 tokio runtime 失败");
+        let _ = rt.block_on(cli_companion_daemon::watchdog::ensure_daemon_if_needed());
+        return;
+    }
+
     // 前台模式
     let rt = tokio::runtime::Runtime::new().expect("创建 tokio runtime 失败");
     if let Err(e) = rt.block_on(run_foreground()) {

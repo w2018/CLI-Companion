@@ -77,15 +77,23 @@ fn spawn_terminal(
 ) -> Result<(), String> {
     let title = format!("{service_name} · CLI Companion 调试终端");
     let (program, args) = shell_command(shell, &title);
+    // v2.2.0 任务11：Windows Terminal 可用时优先经 wt 打开（多标签体验更好）
+    let wd_expanded = working_dir
+        .map(expand_percent)
+        .filter(|wd| !wd.is_empty() && std::path::Path::new(wd).is_dir());
+    let (program, args) = match windows_terminal_path() {
+        Some(wt) => wrap_windows_terminal(&wt, &title, wd_expanded.as_deref(), &program, &args),
+        None => (program, args),
+    };
 
     let mut cmd = Command::new(&program);
     cmd.args(&args);
     for (k, v) in build_env_overrides(env_vars) {
         cmd.env(k, v);
     }
-    // 工作目录：展开后必须真实存在才设置，否则交给系统默认
-    if let Some(wd) = working_dir.map(expand_percent) {
-        if !wd.is_empty() && std::path::Path::new(&wd).is_dir() {
+    // 工作目录：展开后必须真实存在才设置（wt 场景已用 -d 传入），否则交给系统默认
+    if windows_terminal_path().is_none() {
+        if let Some(wd) = wd_expanded {
             cmd.current_dir(wd);
         }
     }
@@ -96,6 +104,42 @@ fn spawn_terminal(
     }
     cmd.spawn().map_err(|e| format!("打开终端失败: {e}"))?;
     Ok(())
+}
+
+/// 探测 Windows Terminal（wt.exe）；未安装返回 None
+///
+/// 探测顺序：`%LOCALAPPDATA%\Microsoft\WindowsApps\wt.exe` → PATH（where）。
+fn windows_terminal_path() -> Option<String> {
+    if let Ok(lapp) = std::env::var("LOCALAPPDATA") {
+        let wt = std::path::Path::new(&lapp).join(r"Microsoft\WindowsApps\wt.exe");
+        if wt.is_file() {
+            return Some(wt.to_string_lossy().to_string());
+        }
+    }
+    let ok = Command::new("where")
+        .arg("wt.exe")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    ok.then(|| "wt.exe".to_string())
+}
+
+/// 把既有 shell 命令包装为 `wt new-tab` 调用（纯函数便于测试）
+fn wrap_windows_terminal(
+    wt: &str,
+    title: &str,
+    working_dir: Option<&str>,
+    program: &str,
+    args: &[String],
+) -> (String, Vec<String>) {
+    let mut out = vec!["new-tab".to_string(), "--title".to_string(), title.to_string()];
+    if let Some(wd) = working_dir {
+        out.push("-d".to_string());
+        out.push(wd.to_string());
+    }
+    out.push(program.to_string());
+    out.extend(args.iter().cloned());
+    (wt.to_string(), out)
 }
 
 /// 终端宿主 → (程序, 参数)；标题用于窗口识别
@@ -241,5 +285,36 @@ mod tests {
             .map(|(n, v)| (n.clone(), expand_percent_with(v, &e)))
             .collect();
         assert_eq!(out, vec![("A".to_string(), "2".to_string())]);
+    }
+
+    #[test]
+    fn wt包装与探测不panic() {
+        // 包装：new-tab --title [-d wd] program args
+        let (p, a) = wrap_windows_terminal(
+            "C:\\wt.exe",
+            "web · 调试终端",
+            Some("C:\\work"),
+            "cmd.exe",
+            &["/K".into(), "title x".into()],
+        );
+        assert_eq!(p, "C:\\wt.exe");
+        assert_eq!(
+            a,
+            vec![
+                "new-tab",
+                "--title",
+                "web · 调试终端",
+                "-d",
+                "C:\\work",
+                "cmd.exe",
+                "/K",
+                "title x"
+            ]
+        );
+        // 无工作目录时不带 -d
+        let (_, a) = wrap_windows_terminal("wt.exe", "t", None, "cmd.exe", &[]);
+        assert!(!a.contains(&"-d".to_string()));
+        // 探测函数可安全执行（有无 wt 均不 panic）
+        let _ = windows_terminal_path();
     }
 }

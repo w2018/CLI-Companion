@@ -5,12 +5,14 @@
 //! - [`dpapi`]：DPAPI 加密（WebDAV 凭据存储）
 //! - [`console`]：控制台创建标志映射
 //! - [`process`]：进程指标采集（CPU 时间 / 内存工作集）
+//! - [`schtasks`]：Windows 计划任务（daemon 看门狗）
 
 pub mod console;
 pub mod dpapi;
 pub mod job;
 pub mod lock;
 pub mod process;
+pub mod schtasks;
 
 /// daemon 命名管道名称
 pub const PIPE_NAME: &str = r"\\.\pipe\cli-companion-daemon";

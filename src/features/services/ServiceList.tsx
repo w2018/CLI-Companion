@@ -12,8 +12,10 @@ import {
   FileTerminal,
   TerminalSquare,
   Stethoscope,
+  Copy,
   X,
 } from "lucide-react";
+import { useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { rpc } from "../../shared/rpc/client";
 import { useServices, useServiceAction, useServiceMetrics } from "../../shared/hooks/useDaemon";
@@ -34,11 +36,45 @@ export function ServiceList() {
   const pushToast = useUiStore((s) => s.pushToast);
   const [editing, setEditing] = useState<ServiceRow | null>(null);
   const [creating, setCreating] = useState(false);
+  // v2.2.0 任务7：克隆（以"新建"提交副本）
+  const [cloning, setCloning] = useState<ServiceRow | null>(null);
   // 删除二次确认（需求：删除必须有明确二次确认对话框）
   const [deleteTarget, setDeleteTarget] = useState<ServiceRow | null>(null);
 
   const rows = useMemo(() => data ?? [], [data]);
   const metricOf = (id: string) => metrics.data?.metrics.find((m) => m.service_id === id);
+
+  // v2.2.0 任务7：拖拽排序（拖拽中本地预览，松手经 config.update 落盘）
+  const [ordered, setOrdered] = useState<ServiceRow[] | null>(null);
+  const dragId = useRef<string | null>(null);
+  const displayRows = ordered ?? rows;
+  const handleDragOver = (e: React.DragEvent, targetId: string) => {
+    e.preventDefault();
+    const from = dragId.current;
+    if (!from || from === targetId) return;
+    const list = [...(ordered ?? rows)];
+    const fi = list.findIndex((r) => r.service.id === from);
+    const ti = list.findIndex((r) => r.service.id === targetId);
+    if (fi < 0 || ti < 0) return;
+    const [moved] = list.splice(fi, 1);
+    list.splice(ti, 0, moved);
+    setOrdered(list);
+  };
+  const commitOrder = async () => {
+    const list = ordered;
+    dragId.current = null;
+    setOrdered(null);
+    if (!list) return;
+    try {
+      // 复用既有 config.update 全量保存；version 与当前 schema 一致
+      await rpc("config.update", {
+        services: { version: 2, services: list.map((r) => r.service) },
+      });
+      pushToast("ok", "排序已保存");
+    } catch (e) {
+      pushToast("err", describeError(e as never));
+    }
+  };
 
   const openTerminal = async (row: ServiceRow) => {
     try {
@@ -147,8 +183,20 @@ export function ServiceList() {
         />
       ) : (
         <ul className="divide-y divide-surface-3 rounded-xl border border-surface-3 bg-surface-2">
-          {rows.map((row) => (
-            <li key={row.service.id} className="px-4 py-3">
+          {displayRows.map((row) => (
+            <li
+              key={row.service.id}
+              draggable
+              onDragStart={() => {
+                dragId.current = row.service.id;
+              }}
+              onDragOver={(e) => handleDragOver(e, row.service.id)}
+              onDragEnd={() => {
+                if (ordered) void commitOrder();
+              }}
+              className="cursor-grab px-4 py-3 active:cursor-grabbing"
+              title="可拖拽调整顺序"
+            >
               <div className="flex flex-wrap items-center gap-3">
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">
@@ -229,6 +277,12 @@ export function ServiceList() {
                     <TerminalSquare size={15} aria-hidden />
                   </IconBtn>
                   <IconBtn
+                    label={`克隆 ${row.service.name}`}
+                    onClick={() => setCloning(row)}
+                  >
+                    <Copy size={15} aria-hidden />
+                  </IconBtn>
+                  <IconBtn
                     label={`编辑 ${row.service.name}`}
                     onClick={() => setEditing(row)}
                   >
@@ -248,12 +302,14 @@ export function ServiceList() {
         </ul>
       )}
 
-      {(creating || editing) && (
+      {(creating || editing || cloning) && (
         <ServiceForm
           initial={editing?.service ?? null}
+          cloneOf={cloning?.service ?? null}
           onClose={() => {
             setCreating(false);
             setEditing(null);
+            setCloning(null);
           }}
         />
       )}

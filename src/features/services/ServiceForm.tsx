@@ -21,6 +21,8 @@ import { parseCommandLine } from "../../shared/utils/parseCommandLine";
 
 interface Props {
   initial: ServiceDefinition | null;
+  /** v2.2.0 任务7：克隆源（提供时以"新建"方式提交副本） */
+  cloneOf?: ServiceDefinition | null;
   onClose: () => void;
 }
 
@@ -59,10 +61,17 @@ function dirOf(exePath: string): string | null {
   return i > 0 ? exePath.slice(0, i) : null;
 }
 
-export function ServiceForm({ initial, onClose }: Props) {
+/** 克隆服务定义：新 ID、名称加"-副本"、刷新时间戳（v2.2.0 任务7） */
+function clonedService(src: ServiceDefinition): ServiceDefinition {
+  const now = new Date().toISOString();
+  return { ...src, id: crypto.randomUUID(), name: `${src.name}-副本`, created_at: now, updated_at: now };
+}
+
+export function ServiceForm({ initial, cloneOf = null, onClose }: Props) {
   const qc = useQueryClient();
   const pushToast = useUiStore((s) => s.pushToast);
-  const [svc, setSvc] = useState<ServiceDefinition>(initial ?? blankService());
+  const isClone = cloneOf !== null;
+  const [svc, setSvc] = useState<ServiceDefinition>(initial ?? (cloneOf ? clonedService(cloneOf) : blankService()));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -175,7 +184,7 @@ export function ServiceForm({ initial, onClose }: Props) {
         setError(`字段「${first.path.join(".")}」校验失败：${first.message}`);
         return;
       }
-      const method = initial ? "service.update" : "service.create";
+      const method = initial && !isClone ? "service.update" : "service.create";
       await rpc(method, { service: svc });
       pushToast("ok", initial ? "服务已更新" : "服务已创建");
       void qc.invalidateQueries({ queryKey: ["services"] });
@@ -192,13 +201,13 @@ export function ServiceForm({ initial, onClose }: Props) {
     <div
       role="dialog"
       aria-modal="true"
-      aria-label={initial ? `编辑服务 ${initial.name}` : "新建服务"}
+      aria-label={initial && !isClone ? `编辑服务 ${initial.name}` : "新建服务"}
       className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-6"
     >
       <div className="flex max-h-full w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-surface-3 bg-surface-2 shadow-2xl">
         <header className="flex items-center justify-between border-b border-surface-3 px-5 py-3">
           <h2 className="text-base font-semibold">
-            {initial ? "编辑服务" : "新建服务"}
+            {initial && !isClone ? "编辑服务" : isClone ? "新建服务（副本）" : "新建服务"}
           </h2>
           <button
             aria-label="关闭"
