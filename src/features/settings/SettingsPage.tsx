@@ -262,6 +262,26 @@ export function SettingsPage() {
             开启：点关闭按钮隐藏到托盘；关闭：点关闭按钮时弹窗确认退出方式
           </p>
         </Row>
+        {/* v2.1.0：服务异常系统通知（daemon 发送；Win32 服务模式收不到） */}
+        <Row label="服务异常系统通知">
+          <div>
+            <input
+              type="checkbox"
+              className="size-4 accent-[rgb(var(--accent))]"
+              checked={app.general.notify_on_failure ?? true}
+              onChange={(e) =>
+                setApp({
+                  ...app,
+                  general: { ...app.general, notify_on_failure: e.target.checked },
+                })
+              }
+            />
+            <p className="mt-1 text-xs text-muted">
+              服务崩溃、自动重启失败或触发熔断时弹出 Windows 系统通知（关闭 GUI 也能收到；
+              以 Windows 服务模式运行时不可用）
+            </p>
+          </div>
+        </Row>
         <div className="flex justify-end pt-2">
           <button onClick={() => saveApp()} disabled={busy} className={btnPrimary}>
             保存通用设置

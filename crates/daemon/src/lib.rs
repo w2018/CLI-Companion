@@ -5,6 +5,8 @@ pub mod app_config;
 pub mod dirs;
 pub mod events;
 pub mod manager;
+pub mod metrics;
+pub mod notify;
 pub mod rpc;
 pub mod service;
 pub mod state;

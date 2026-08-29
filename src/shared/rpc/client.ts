@@ -22,6 +22,7 @@ export type MethodName =
   | "service.restart"
   | "service.logs"
   | "service.logs.clear"
+  | "service.metrics"
   | "daemon.shutdown"
   | "daemon.logs"
   | "daemon.logs.clear"

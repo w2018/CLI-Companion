@@ -33,7 +33,8 @@ fn main() {
             gui_core::commands::set_boot_autostart_mode,
             gui_core::commands::exit_app,
             gui_core::commands::read_text_file,
-            gui_core::commands::write_text_file
+            gui_core::commands::write_text_file,
+            gui_core::terminal::open_service_terminal
         ])
         .setup(|app| {
             // 开机自启：首次使用写入默认模式（登录后自动启动 daemon），
@@ -42,6 +43,8 @@ fn main() {
             // daemon 事件流订阅转发：管道长连接 → "daemon-event" Tauri 事件
             gui_core::events::spawn(app.handle().clone());
             setup_tray(app)?;
+            // 托盘"服务"子菜单：按 daemon 当前服务列表初始化（失败静默）
+            gui_core::tray::schedule_rebuild(app.handle());
             Ok(())
         })
         // 关闭行为完全由前端 onCloseRequested 处理（托盘隐藏 / 弹窗确认退出）。
@@ -96,34 +99,45 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let mut builder = TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
         .tooltip("CLI Companion")
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => show_main_window(app),
-            "quit_gui" => {
-                // 仅退出 GUI；daemon 作为独立进程/服务继续运行
-                app.exit(0);
-            }
-            "quit_all" => {
-                // 完全退出：显示窗口并通知前端执行"逐条停止服务"进度流程，
-                // 前端完成后自行销毁窗口退出；此处仅做兜底
-                if let Some(win) = app.get_webview_window("main") {
-                    let _ = win.show();
-                    let _ = win.set_focus();
-                    let _ = win.emit("quit-all-requested", ());
+        .on_menu_event(|app, event| {
+            let id = event.id.as_ref();
+            // 服务快捷启停：svc:<start|stop>:<service_id>
+            if let Some(rest) = id.strip_prefix("svc:") {
+                if let Some((action, service_id)) = rest.split_once(':') {
+                    gui_core::tray::run_service_action(app, action, service_id);
                 }
-                // 兜底：前端无响应（webview 未加载/事件未送达/停止超时）时，
-                // 退出 GUI 前由 Rust 直接向 daemon 发关闭指令并等待其退出。
-                // 此前仅 app.exit(0)，会漏发 daemon.shutdown 导致 daemon 残留。
-                // 正常路径由前端完成停止进度后自行销毁窗口，远快于此。
-                let app = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                    // daemon 已被前端关闭时这里立即返回；否则补发（含停止全部服务）
-                    let _ = gui_core::connection::DaemonConnection::shutdown_and_wait(true, 5_000)
-                        .await;
-                    app.exit(0);
-                });
+                return;
             }
-            _ => {}
+            match id {
+                "show" => show_main_window(app),
+                "quit_gui" => {
+                    // 仅退出 GUI；daemon 作为独立进程/服务继续运行
+                    app.exit(0);
+                }
+                "quit_all" => {
+                    // 完全退出：显示窗口并通知前端执行"逐条停止服务"进度流程，
+                    // 前端完成后自行销毁窗口退出；此处仅做兜底
+                    if let Some(win) = app.get_webview_window("main") {
+                        let _ = win.show();
+                        let _ = win.set_focus();
+                        let _ = win.emit("quit-all-requested", ());
+                    }
+                    // 兜底：前端无响应（webview 未加载/事件未送达/停止超时）时，
+                    // 退出 GUI 前由 Rust 直接向 daemon 发关闭指令并等待其退出。
+                    // 此前仅 app.exit(0)，会漏发 daemon.shutdown 导致 daemon 残留。
+                    // 正常路径由前端完成停止进度后自行销毁窗口，远快于此。
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                        // daemon 已被前端关闭时这里立即返回；否则补发（含停止全部服务）
+                        let _ =
+                            gui_core::connection::DaemonConnection::shutdown_and_wait(true, 5_000)
+                                .await;
+                        app.exit(0);
+                    });
+                }
+                _ => {}
+            }
         })
         .on_tray_icon_event(|tray, event| {
             // 仅左键单击抬起时切换窗口显隐（右键交给系统菜单）

@@ -161,7 +161,11 @@ pub async fn bootstrap(
     let events = Arc::new(crate::events::new_bus());
     let state = AppState {
         as_service,
-        manager: Arc::new(ServiceManager::new(dirs.clone(), events.clone())),
+        manager: Arc::new(ServiceManager::new(
+            dirs.clone(),
+            events.clone(),
+            as_service,
+        )),
         config: Arc::new(AsyncMutex::new(ConfigStore {
             services,
             app,

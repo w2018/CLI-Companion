@@ -3,9 +3,9 @@
 // - exe 设置后工作目录自动跟随为 exe 所在目录（可自定义覆盖）
 // - 点击遮罩不关闭窗口，防止误触丢失已填内容（需求3）
 // - 提交前 Zod 校验，错误定位到具体字段
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { X, FolderOpen } from "lucide-react";
+import { X, FolderOpen, Copy } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { rpc } from "../../shared/rpc/client";
 import {
@@ -67,6 +67,29 @@ export function ServiceForm({ initial, onClose }: Props) {
 
   const set = <K extends keyof ServiceDefinition>(key: K, value: ServiceDefinition[K]) =>
     setSvc((s) => ({ ...s, [key]: value }));
+
+  /** 渲染完整命令行（exe + 启用参数），供复制调试；与 daemon render_args 语义一致 */
+  const commandLine = useMemo(() => {
+    if (!svc.exe) return "";
+    const quote = (s: string) => (s.includes(" ") ? `"${s.replaceAll('"', '\\"')}"` : s);
+    const parts: string[] = [quote(svc.exe)];
+    for (const a of svc.args) {
+      if (!a.enabled) continue;
+      if (a.kind === "flag") parts.push(quote(a.key));
+      else if (a.kind === "option" && a.value != null) parts.push(quote(a.key), quote(a.value));
+      else if (a.kind === "positional" && a.value != null) parts.push(quote(a.value));
+    }
+    return parts.join(" ");
+  }, [svc.exe, svc.args]);
+
+  const copyCommandLine = async () => {
+    try {
+      await navigator.clipboard.writeText(commandLine);
+      pushToast("ok", "完整命令行已复制");
+    } catch {
+      pushToast("err", "复制失败，请手动选择文本复制");
+    }
+  };
 
   /** 需求1：exe 变更后，工作目录为空（或等于旧 exe 目录）时自动跟随为新的 exe 目录 */
   const setExe = (path: string) => {
@@ -185,6 +208,24 @@ export function ServiceForm({ initial, onClose }: Props) {
                 </button>
               </div>
             </Field>
+
+            {/* 完整命令行预览：exe + 启用参数，一键复制到终端调试 */}
+            {commandLine && (
+              <Field label="完整命令行预览">
+                <div className="flex gap-2">
+                  <code className="min-h-9 flex-1 truncate rounded-lg border border-dashed border-surface-3 bg-surface px-3 py-2 font-mono text-xs text-muted">
+                    {commandLine}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => void copyCommandLine()}
+                    className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-lg border border-surface-3 px-3 text-xs hover:bg-surface-3"
+                  >
+                    <Copy size={13} aria-hidden /> 复制
+                  </button>
+                </div>
+              </Field>
+            )}
 
             <div className="grid grid-cols-2 gap-3">
               <Field label="名称 *">

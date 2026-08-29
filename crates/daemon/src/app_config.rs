@@ -31,6 +31,13 @@ pub struct GeneralSettings {
     pub theme: String,
     /// 关闭窗口时隐藏到托盘
     pub close_to_tray: bool,
+    /// 服务崩溃 / 自动重启失败时发送系统 Toast 通知（默认开）
+    #[serde(default = "default_true")]
+    pub notify_on_failure: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for GeneralSettings {
@@ -39,6 +46,7 @@ impl Default for GeneralSettings {
             language: "zh-CN".into(),
             theme: "system".into(),
             close_to_tray: true,
+            notify_on_failure: true,
         }
     }
 }

@@ -4,7 +4,7 @@ use crate::state::AppState;
 use cli_companion_domain::{ServiceDefinition, ServiceStatus, ServicesConfig};
 use cli_companion_platform::PIPE_NAME;
 use cli_companion_protocol::codec;
-use cli_companion_protocol::params::{InfoResult, PingResult};
+use cli_companion_protocol::params::{InfoResult, MetricsResult, PingResult, ServiceMetric};
 use cli_companion_protocol::{error, event, method, Request, Response, RpcError};
 use serde_json::{json, Value};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -389,6 +389,20 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
                     format!("清空日志失败: {e}"),
                 )),
             }
+        }
+
+        // 资源指标：从 actor 运行时状态取最近一次 CPU / 内存采样
+        M::ServiceMetrics => {
+            let runtimes = state.manager.all_runtimes();
+            let metrics = runtimes
+                .into_iter()
+                .map(|(id, rt)| ServiceMetric {
+                    service_id: id.to_string(),
+                    cpu_percent: rt.cpu_percent,
+                    mem_bytes: rt.mem_bytes,
+                })
+                .collect();
+            serde_json::to_value(MetricsResult { metrics }).map_err(|e| internal(e.to_string()))
         }
 
         // ===== daemon =====

@@ -29,3 +29,5 @@ cli-companion-webdav = { path = "../webdav-client" }
 
 # Win32 服务支持（SCM 调度/安装/卸载）
 windows-service = "0.8"
+# 失败 Toast 通知（无 GUI 可用；session 0 服务模式跳过）
+tauri-winrt-notification = "0.2"

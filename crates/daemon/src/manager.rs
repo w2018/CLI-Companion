@@ -12,14 +12,17 @@ pub struct ServiceManager {
     actors: Mutex<ActorMap>,
     dirs: DataDirs,
     events: Arc<EventTx>,
+    /// daemon 是否以 Win32 服务运行（session 0，Toast 通知需跳过）
+    as_service: bool,
 }
 
 impl ServiceManager {
-    pub fn new(dirs: DataDirs, events: Arc<EventTx>) -> Self {
+    pub fn new(dirs: DataDirs, events: Arc<EventTx>, as_service: bool) -> Self {
         Self {
             actors: Mutex::new(HashMap::new()),
             dirs,
             events,
+            as_service,
         }
     }
 
@@ -27,7 +30,9 @@ impl ServiceManager {
     pub fn ensure_actor(&self, id: ServiceId) -> ActorHandle {
         let mut map = self.actors.lock().unwrap();
         map.entry(id)
-            .or_insert_with(|| spawn_actor(id, self.dirs.clone(), self.events.clone()))
+            .or_insert_with(|| {
+                spawn_actor(id, self.dirs.clone(), self.events.clone(), self.as_service)
+            })
             .clone()
     }
 
@@ -123,8 +128,9 @@ impl ServiceManager {
         let mut map = self.actors.lock().unwrap();
         // 新增
         for id in ids {
-            map.entry(*id)
-                .or_insert_with(|| spawn_actor(*id, self.dirs.clone(), self.events.clone()));
+            map.entry(*id).or_insert_with(|| {
+                spawn_actor(*id, self.dirs.clone(), self.events.clone(), self.as_service)
+            });
         }
         // 移除已删除的服务 actor
         let to_remove: Vec<ServiceId> = map.keys().filter(|k| !ids.contains(k)).copied().collect();

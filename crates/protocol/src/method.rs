@@ -40,6 +40,9 @@ pub enum Method {
     ServiceLogs,
     #[serde(rename = "service.logs.clear")]
     ServiceLogsClear,
+    /// 全部服务的资源指标（CPU / 内存）
+    #[serde(rename = "service.metrics")]
+    ServiceMetrics,
 
     // 守护进程
     #[serde(rename = "daemon.shutdown")]
@@ -83,6 +86,7 @@ impl Method {
             Method::ServiceRestart => "service.restart",
             Method::ServiceLogs => "service.logs",
             Method::ServiceLogsClear => "service.logs.clear",
+            Method::ServiceMetrics => "service.metrics",
             Method::DaemonShutdown => "daemon.shutdown",
             Method::DaemonLogs => "daemon.logs",
             Method::DaemonLogsClear => "daemon.logs.clear",
@@ -118,6 +122,7 @@ mod tests {
             Method::ServiceRestart,
             Method::ServiceLogs,
             Method::ServiceLogsClear,
+            Method::ServiceMetrics,
             Method::DaemonShutdown,
             Method::DaemonLogs,
             Method::DaemonLogsClear,

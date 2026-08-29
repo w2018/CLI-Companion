@@ -90,8 +90,23 @@ export const RuntimeStateSchema = z.object({
   restarts_recent_10m: z.number(),
   last_exit_code: z.number().optional().nullable(),
   last_health: z.string().optional().nullable(),
+  // v2.1.0 资源监控采样（仅运行中服务有值）
+  cpu_percent: z.number().optional().nullable(),
+  mem_bytes: z.number().optional().nullable(),
 });
 export type RuntimeState = z.infer<typeof RuntimeStateSchema>;
+
+/** service.metrics 单服务资源指标 */
+export const ServiceMetricSchema = z.object({
+  service_id: z.string(),
+  cpu_percent: z.number().optional().nullable(),
+  mem_bytes: z.number().optional().nullable(),
+});
+export type ServiceMetric = z.infer<typeof ServiceMetricSchema>;
+
+/** service.metrics 响应 */
+export const MetricsSchema = z.object({ metrics: z.array(ServiceMetricSchema) });
+export type Metrics = z.infer<typeof MetricsSchema>;
 
 /** service.list 的行 */
 export const ServiceRowSchema = z.object({
@@ -108,6 +123,8 @@ export const AppConfigSchema = z.object({
     language: z.string(),
     theme: z.string(),
     close_to_tray: z.boolean(),
+    // v2.1.0 服务异常系统通知（daemon 默认 true）
+    notify_on_failure: z.boolean().optional(),
   }),
   webdav: z.object({
     enabled: z.boolean(),

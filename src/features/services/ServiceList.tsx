@@ -10,13 +10,16 @@ import {
   Trash2,
   Plus,
   FileTerminal,
+  TerminalSquare,
 } from "lucide-react";
-import { useServices, useServiceAction } from "../../shared/hooks/useDaemon";
+import { invoke } from "@tauri-apps/api/core";
+import { useServices, useServiceAction, useServiceMetrics } from "../../shared/hooks/useDaemon";
 import { StatusBadge } from "../../shared/components/StatusBadge";
 import { EmptyState } from "../../shared/components/EmptyState";
 import { ConfirmDialog } from "../../shared/components/ConfirmDialog";
 import { useUiStore } from "../../stores/uiStore";
 import { describeError } from "../../shared/rpc/errors";
+import { formatBytes } from "../../shared/utils/format";
 import { ServiceForm } from "./ServiceForm";
 import type { ServiceRow } from "../../shared/rpc/schema";
 import type { MethodName } from "../../shared/rpc/client";
@@ -24,6 +27,7 @@ import type { MethodName } from "../../shared/rpc/client";
 export function ServiceList() {
   const { data, isPending, isError, error, refetch } = useServices();
   const action = useServiceAction();
+  const metrics = useServiceMetrics(!isError);
   const pushToast = useUiStore((s) => s.pushToast);
   const [editing, setEditing] = useState<ServiceRow | null>(null);
   const [creating, setCreating] = useState(false);
@@ -31,6 +35,16 @@ export function ServiceList() {
   const [deleteTarget, setDeleteTarget] = useState<ServiceRow | null>(null);
 
   const rows = useMemo(() => data ?? [], [data]);
+  const metricOf = (id: string) => metrics.data?.metrics.find((m) => m.service_id === id);
+
+  const openTerminal = async (row: ServiceRow) => {
+    try {
+      await invoke("open_service_terminal", { serviceId: row.service.id });
+      pushToast("ok", `已打开「${row.service.name}」调试终端（含其环境变量与工作目录）`);
+    } catch (e) {
+      pushToast("err", describeError(e as never));
+    }
+  };
 
   const doAction = (
     method: Extract<
@@ -114,7 +128,13 @@ export function ServiceList() {
                     {row.service.args.length > 0 && " …"}
                   </p>
                   {row.runtime.status === "running" && row.runtime.pid != null && (
-                    <p className="mt-0.5 text-xs text-muted">PID {row.runtime.pid}</p>
+                    <p className="mt-0.5 text-xs text-muted">
+                      PID {row.runtime.pid}
+                      {metricOf(row.service.id)?.cpu_percent != null &&
+                        ` · CPU ${metricOf(row.service.id)!.cpu_percent!.toFixed(1)}%`}
+                      {metricOf(row.service.id)?.mem_bytes != null &&
+                        ` · 内存 ${formatBytes(metricOf(row.service.id)!.mem_bytes)}`}
+                    </p>
                   )}
                 </div>
                 <StatusBadge status={row.runtime.status} />
@@ -158,6 +178,12 @@ export function ServiceList() {
                   >
                     <ScrollText size={15} aria-hidden />
                   </Link>
+                  <IconBtn
+                    label={`打开 ${row.service.name} 调试终端（含其环境变量与工作目录）`}
+                    onClick={() => void openTerminal(row)}
+                  >
+                    <TerminalSquare size={15} aria-hidden />
+                  </IconBtn>
                   <IconBtn
                     label={`编辑 ${row.service.name}`}
                     onClick={() => setEditing(row)}

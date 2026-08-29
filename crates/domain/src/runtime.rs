@@ -36,6 +36,12 @@ pub struct RuntimeState {
     /// 最后一次健康检查结果
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_health: Option<String>,
+    /// 最近一次采样的 CPU 占用（0-100，按逻辑核数归一化；仅运行中服务有值）
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cpu_percent: Option<f32>,
+    /// 最近一次采样的进程树内存工作集（字节；仅运行中服务有值）
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub mem_bytes: Option<u64>,
 }
 
 impl Default for RuntimeState {
@@ -48,6 +54,8 @@ impl Default for RuntimeState {
             restarts_recent_10m: 0,
             last_exit_code: None,
             last_health: None,
+            cpu_percent: None,
+            mem_bytes: None,
         }
     }
 }

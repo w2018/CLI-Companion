@@ -2,7 +2,7 @@
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { z } from "zod";
 import { rpc, rpcSchema } from "../rpc/client";
-import { ServiceRowSchema, type ServiceRow } from "../rpc/schema";
+import { ServiceRowSchema, MetricsSchema, type ServiceRow } from "../rpc/schema";
 import type { MethodName } from "../rpc/client";
 
 export type ConnState = "connecting" | "connected" | "unavailable";
@@ -41,6 +41,17 @@ export function useServices() {
 export function asRows(data: unknown): ServiceRow[] {
   const parsed = ServiceRowsSchema.safeParse({ services: data });
   return parsed.success ? parsed.data.services : [];
+}
+
+/** 服务资源指标（CPU / 内存）：3s 轮询；enabled=false 时不请求 */
+export function useServiceMetrics(enabled: boolean) {
+  return useQuery({
+    queryKey: ["metrics"],
+    queryFn: () => rpcSchema(MetricsSchema, "service.metrics"),
+    refetchInterval: 3000,
+    enabled,
+    retry: false,
+  });
 }
 
 /** 服务操作 mutation：操作后使列表失效 */

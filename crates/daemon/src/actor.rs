@@ -6,12 +6,15 @@
 
 use crate::dirs::DataDirs;
 use crate::events::{make_event, EventTx};
+use crate::metrics::{compute_cpu_percent, SAMPLE_INTERVAL_MS};
+use crate::notify;
 use chrono::Utc;
 use cli_companion_domain::{
     Backoff, RestartPolicy, RuntimeState, ServiceDefinition, ServiceId, ServiceStatus,
 };
 use cli_companion_platform::console::creation_flags;
 use cli_companion_platform::job::Job;
+use cli_companion_platform::process;
 use cli_companion_protocol::EventTopic;
 use std::collections::HashMap;
 #[cfg(windows)]
@@ -64,10 +67,21 @@ struct Actor {
     restart_times: Vec<Instant>,
     /// 事件总线（崩溃/自动重启事件）
     events: Arc<EventTx>,
+    /// daemon 是否以 Win32 服务运行（session 0 收不到 Toast）
+    as_service: bool,
+    /// 上次采样的进程 CPU 累计时间（100ns；CPU% 计算基线）
+    last_cpu_100ns: Option<u64>,
+    /// 上次采样时刻
+    last_sample_at: Option<Instant>,
 }
 
 /// 启动 actor 任务并返回句柄
-pub fn spawn_actor(id: ServiceId, dirs: DataDirs, events: Arc<EventTx>) -> ActorHandle {
+pub fn spawn_actor(
+    id: ServiceId,
+    dirs: DataDirs,
+    events: Arc<EventTx>,
+    as_service: bool,
+) -> ActorHandle {
     let state = Arc::new(Mutex::new(RuntimeState::default()));
     let (tx, rx) = mpsc::channel(16);
     let actor = Actor {
@@ -80,6 +94,9 @@ pub fn spawn_actor(id: ServiceId, dirs: DataDirs, events: Arc<EventTx>) -> Actor
         current_def: None,
         restart_times: Vec::new(),
         events,
+        as_service,
+        last_cpu_100ns: None,
+        last_sample_at: None,
     };
     tokio::spawn(actor.run());
     ActorHandle { tx, state }
@@ -148,26 +165,50 @@ impl Actor {
                                 EventTopic::ServiceHealth,
                                 serde_json::json!({"exit_code": code, "status": "failed"}),
                             );
+                            notify::notify_service_failure(
+                                &self.dirs,
+                                self.as_service,
+                                "CLI 服务已崩溃",
+                                &format!("{}：进程意外退出（退出码 {code}）", self.def_name()),
+                            );
                             // 按策略尝试自动重启（熔断器 + 退避等待均满足才启动）
                             if let Some(def) = self.current_def.clone() {
                                 if self.should_auto_restart(&def) && self.wait_backoff(&def).await {
                                     tracing::info!(service = %self.id, "自动重启服务");
                                     match self.start(&def).await {
-                                        Ok(()) => self.emit(
-                                            EventTopic::ServiceStarted,
-                                            serde_json::json!({"auto": true}),
-                                        ),
+                                        Ok(()) => {
+                                            self.emit(
+                                                EventTopic::ServiceStarted,
+                                                serde_json::json!({"auto": true}),
+                                            );
+                                            notify::notify_service_failure(
+                                                &self.dirs,
+                                                self.as_service,
+                                                "服务已自动重启",
+                                                &format!("{}：崩溃后已自动恢复运行", self.def_name()),
+                                            );
+                                        }
                                         Err(e) => {
                                             tracing::error!(service = %self.id, "重启失败: {e}");
                                             self.emit(
                                                 EventTopic::ServiceRestartAttempt,
                                                 serde_json::json!({"ok": false, "error": e}),
                                             );
+                                            notify::notify_service_failure(
+                                                &self.dirs,
+                                                self.as_service,
+                                                "服务自动重启失败",
+                                                &format!("{}：{e}", self.def_name()),
+                                            );
                                         }
                                     }
                                 }
                             }
                         }
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(SAMPLE_INTERVAL_MS)) => {
+                        // 资源指标采样：失败静默（进程刚退出属正常）
+                        self.sample_metrics();
                     }
                 }
             } else {
@@ -308,10 +349,13 @@ impl Actor {
 
         let code = child.try_wait().ok().flatten().and_then(|s| s.code());
         self._job = None; // Drop 触发 KILL_ON_JOB_CLOSE 清理残留
+        self.clear_metrics();
         self.update(|s| {
             s.status = ServiceStatus::Stopped;
             s.pid = None;
             s.last_exit_code = code;
+            s.cpu_percent = None;
+            s.mem_bytes = None;
         });
         tracing::info!(service = %self.id, "服务已停止");
         Ok(())
@@ -321,11 +365,73 @@ impl Actor {
     fn on_exit(&mut self, code: i32) {
         self.child = None;
         self._job = None;
+        self.clear_metrics();
         self.update(|s| {
             s.status = ServiceStatus::Failed;
             s.pid = None;
             s.last_exit_code = Some(code);
+            s.cpu_percent = None;
+            s.mem_bytes = None;
         });
+    }
+
+    /// 采样 CPU / 内存并写入运行时状态（进程刚退出时静默跳过）
+    fn sample_metrics(&mut self) {
+        let Some(child) = &self.child else { return };
+        let pid = child.id();
+        // CPU 取根进程（主 exe）累计时间；内存取 Job 进程树工作集之和
+        let cpu = process::snapshot(pid).ok().map(|s| s.cpu_time_100ns);
+        let mem = self.job_tree_mem_bytes(pid);
+        let now = Instant::now();
+        let cpu_pct = match (self.last_sample_at, self.last_cpu_100ns, cpu) {
+            (Some(prev_at), Some(prev_t), Some(now_t)) => {
+                let cores = std::thread::available_parallelism()
+                    .map(|n| n.get() as u64)
+                    .unwrap_or(1);
+                compute_cpu_percent(prev_t, now_t, now - prev_at, cores)
+            }
+            _ => None, // 首次采样无基线
+        };
+        self.last_sample_at = cpu.as_ref().map(|_| now);
+        self.last_cpu_100ns = cpu;
+        self.update(|s| {
+            // CPU% 无基线时保持上次值，避免界面跳动
+            if let Some(p) = cpu_pct {
+                s.cpu_percent = Some(p);
+            }
+            s.mem_bytes = mem;
+        });
+    }
+
+    /// Job 进程树的内存工作集之和；Job 查询失败时退化为仅根进程
+    fn job_tree_mem_bytes(&self, root_pid: u32) -> Option<u64> {
+        let pids = match &self._job {
+            Some(job) => job.process_ids().unwrap_or_else(|_| vec![root_pid]),
+            None => vec![root_pid],
+        };
+        let mut total = 0u64;
+        let mut any = false;
+        for p in &pids {
+            if let Ok(snap) = process::snapshot(*p) {
+                total += snap.working_set_bytes;
+                any = true;
+            }
+        }
+        any.then_some(total)
+    }
+
+    /// 清空采样基线（进程退出后基线失效）
+    fn clear_metrics(&mut self) {
+        self.last_cpu_100ns = None;
+        self.last_sample_at = None;
+    }
+
+    /// 当前定义的服务名（用于通知文案；无定义时回退为 ID）
+    fn def_name(&self) -> String {
+        self.current_def
+            .as_ref()
+            .map(|d| d.name.clone())
+            .unwrap_or_else(|| self.id.to_string())
     }
 
     /// 熔断器 + 策略判断：是否允许自动重启
@@ -342,6 +448,16 @@ impl Actor {
             self.emit(
                 EventTopic::ServiceRestartAttempt,
                 serde_json::json!({"ok": false, "circuit_breaker": true}),
+            );
+            notify::notify_service_failure(
+                &self.dirs,
+                self.as_service,
+                "服务已熔断",
+                &format!(
+                    "{}：10 分钟内重启超过 {} 次，已暂停自动重启",
+                    self.def_name(),
+                    def.restart.max_attempts_10m
+                ),
             );
             return false;
         }

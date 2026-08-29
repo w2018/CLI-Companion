@@ -45,6 +45,10 @@ async fn run_once(app: &tauri::AppHandle) -> Result<(), String> {
         let ev: cli_companion_protocol::Event = codec::read_frame(&mut pipe)
             .await
             .map_err(|e| e.to_string())?;
+        // 服务/配置变化同步刷新托盘"服务"子菜单（失败静默）
+        if crate::tray::should_rebuild_on(&ev) {
+            crate::tray::schedule_rebuild(app);
+        }
         let _ = app.emit(EVENT_NAME, serde_json::to_value(&ev).unwrap_or_default());
     }
 }

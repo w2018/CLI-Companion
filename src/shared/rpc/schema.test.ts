@@ -84,6 +84,44 @@ describe("AppConfigSchema", () => {
     };
     expect(AppConfigSchema.safeParse(app).success).toBe(true);
   });
+
+  it("notify_on_failure 缺省与有值均可解析（向后兼容）", () => {
+    const general = { language: "zh-CN", theme: "system", close_to_tray: true };
+    expect(AppConfigSchema.shape.general.safeParse(general).success).toBe(true);
+    expect(
+      AppConfigSchema.shape.general.safeParse({ ...general, notify_on_failure: false }).success,
+    ).toBe(true);
+  });
+});
+
+describe("MetricsSchema", () => {
+  it("解析 service.metrics 响应（可选字段缺省兼容）", async () => {
+    const { MetricsSchema } = await import("./schema");
+    const r = MetricsSchema.safeParse({
+      metrics: [
+        { service_id: "a", cpu_percent: 12.5, mem_bytes: 268435456 },
+        { service_id: "b" },
+      ],
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.metrics[0].cpu_percent).toBe(12.5);
+      expect(r.data.metrics[1].mem_bytes).toBeUndefined();
+    }
+  });
+
+  it("runtime 新增 cpu/mem 采样字段可解析", async () => {
+    const { RuntimeStateSchema } = await import("./schema");
+    const r = RuntimeStateSchema.safeParse({
+      status: "running",
+      pid: 100,
+      restart_count: 0,
+      restarts_recent_10m: 0,
+      cpu_percent: 3.5,
+      mem_bytes: 1048576,
+    });
+    expect(r.success).toBe(true);
+  });
 });
 
 describe("SyncStatusSchema", () => {

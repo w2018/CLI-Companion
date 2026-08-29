@@ -33,6 +33,7 @@ fn test_state(tag: &str) -> AppState {
         manager: Arc::new(cli_companion_daemon::manager::ServiceManager::new(
             dirs.clone(),
             Arc::new(cli_companion_daemon::events::new_bus()),
+            false,
         )),
         config: Arc::new(AsyncMutex::new(cli_companion_daemon::state::ConfigStore {
             services: cli_companion_domain::ServicesConfig::default(),

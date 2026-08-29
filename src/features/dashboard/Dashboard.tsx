@@ -11,11 +11,11 @@ import {
   FileText,
 } from "lucide-react";
 import { rpc } from "../../shared/rpc/client";
-import { useDaemonConnection, useServices } from "../../shared/hooks/useDaemon";
+import { useDaemonConnection, useServices, useServiceMetrics } from "../../shared/hooks/useDaemon";
 import { StatusBadge } from "../../shared/components/StatusBadge";
 import { EmptyState } from "../../shared/components/EmptyState";
-import { formatDateTime, formatDuration } from "../../shared/utils/format";
-import type { ServiceRow } from "../../shared/rpc/schema";
+import { formatDateTime, formatDuration, formatBytes } from "../../shared/utils/format";
+import type { ServiceRow, ServiceMetric } from "../../shared/rpc/schema";
 
 interface InfoResult {
   daemon_version: string;
@@ -36,6 +36,10 @@ export function Dashboard() {
   // daemon 不可达时，缓存的运行时状态（运行中/已停止/异常）一律不作为当前状态展示
   const offline = conn.state === "unavailable";
   const rows = services.data ?? [];
+  // 资源指标：3s 轮询（daemon 不可达时暂停）
+  const metrics = useServiceMetrics(!offline);
+  const metricOf = (id: string): ServiceMetric | undefined =>
+    metrics.data?.metrics.find((m) => m.service_id === id);
   const running = rows.filter((r) => r.runtime.status === "running").length;
   const failed = rows.filter((r) => r.runtime.status === "failed").length;
   const stopped = rows.length - running - failed;
@@ -133,7 +137,12 @@ export function Dashboard() {
         ) : (
           <ul className="space-y-3">
             {rows.slice(0, 8).map((r) => (
-              <ServiceOverviewRow key={r.service.id} row={r} offline={offline} />
+              <ServiceOverviewRow
+                key={r.service.id}
+                row={r}
+                offline={offline}
+                metric={metricOf(r.service.id)}
+              />
             ))}
           </ul>
         )}
@@ -142,8 +151,16 @@ export function Dashboard() {
   );
 }
 
-/** 服务总览行：名称 + 说明 + 创建时间 + 启动时间 + 运行时长 + 状态 */
-function ServiceOverviewRow({ row, offline }: { row: ServiceRow; offline: boolean }) {
+/** 服务总览行：名称 + 说明 + 创建时间 + 启动时间 + 运行时长 + 状态 + 资源占用 */
+function ServiceOverviewRow({
+  row,
+  offline,
+  metric,
+}: {
+  row: ServiceRow;
+  offline: boolean;
+  metric?: ServiceMetric;
+}) {
   const isRunning = !offline && row.runtime.status === "running";
   return (
     <li className="rounded-xl border border-surface-3 bg-surface-2 p-4 transition-colors hover:border-accent/40">
@@ -156,7 +173,13 @@ function ServiceOverviewRow({ row, offline }: { row: ServiceRow; offline: boolea
         ) : (
           <StatusBadge status={row.runtime.status} />
         )}
-        {isRunning && (
+        {isRunning && metric && (metric.cpu_percent != null || metric.mem_bytes != null) && (
+          <span className="ml-auto inline-flex items-center gap-1 font-mono text-xs text-muted">
+            {metric.cpu_percent != null && <>CPU {metric.cpu_percent.toFixed(1)}% · </>}
+            {metric.mem_bytes != null && <>内存 {formatBytes(metric.mem_bytes)}</>}
+          </span>
+        )}
+        {isRunning && (!metric || (metric.cpu_percent == null && metric.mem_bytes == null)) && (
           <span className="ml-auto inline-flex items-center gap-1 text-xs text-ok">
             <Clock size={12} aria-hidden />
             已运行 {formatDuration(row.runtime.started_at)}
