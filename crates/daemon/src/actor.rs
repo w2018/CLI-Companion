@@ -73,6 +73,10 @@ struct Actor {
     last_cpu_100ns: Option<u64>,
     /// 上次采样时刻
     last_sample_at: Option<Instant>,
+    /// 上次内存告警时刻（v2.2.0，10 分钟冷却）
+    last_mem_alert: Option<Instant>,
+    /// 命令探活连续不健康次数（v2.2.0，达到 failure_threshold 终止进程走自愈）
+    cmd_unhealthy_streak: u32,
 }
 
 /// 启动 actor 任务并返回句柄
@@ -97,6 +101,8 @@ pub fn spawn_actor(
         as_service,
         last_cpu_100ns: None,
         last_sample_at: None,
+        last_mem_alert: None,
+        cmd_unhealthy_streak: 0,
     };
     tokio::spawn(actor.run());
     ActorHandle { tx, state }
@@ -206,6 +212,9 @@ impl Actor {
                                     }
                                 }
                             }
+                        } else if self.child.is_some() {
+                            // v2.2.0：进程仍在运行 → 命令探活（仅 HealthKind::Command）
+                            self.check_command_health().await;
                         }
                     }
                     _ = tokio::time::sleep(Duration::from_millis(SAMPLE_INTERVAL_MS)) => {
@@ -306,6 +315,7 @@ impl Actor {
         self.child = Some(child);
         self._job = Some(job);
         self.current_def = Some(def.clone());
+        self.cmd_unhealthy_streak = 0;
         let now = Utc::now();
         self.update(|s| {
             s.status = ServiceStatus::Running;
@@ -409,6 +419,24 @@ impl Actor {
             }
             s.mem_bytes = mem;
         });
+        // v2.2.0：内存告警（阈值 + 10 分钟冷却，走既有通知通道）
+        if let Some(def) = &self.current_def {
+            if crate::metrics::mem_alert_triggered(def.mem_alert_mb, mem, self.last_mem_alert) {
+                self.last_mem_alert = Some(now);
+                let mb = mem.unwrap_or(0) / 1024 / 1024;
+                let limit = def.mem_alert_mb.unwrap_or(0);
+                self.emit(
+                    EventTopic::ServiceHealth,
+                    serde_json::json!({"mem_alert": true, "mem_bytes": mem}),
+                );
+                notify::notify_service_failure(
+                    &self.dirs,
+                    self.as_service,
+                    "内存告警",
+                    &format!("{}：内存 {} MB 已超过阈值 {} MB", self.def_name(), mb, limit),
+                );
+            }
+        }
     }
 
     /// Job 进程树的内存工作集之和；Job 查询失败时退化为仅根进程
@@ -475,6 +503,44 @@ impl Actor {
             &log_tail,
         ) {
             tracing::warn!(service = %self.id, "崩溃诊断归档失败: {e}");
+        }
+    }
+
+    /// 命令探活（v2.2.0，仅 HealthKind::Command；其他 kind 保持原快路径不变）
+    ///
+    /// 连续不健康达到 failure_threshold 时终止进程，复用既有"崩溃 → 通知 →
+    /// 自动重启（退避 + 熔断）"路径，不另起重启逻辑。
+    async fn check_command_health(&mut self) {
+        let Some(def) = self.current_def.clone() else {
+            return;
+        };
+        let cli_companion_domain::HealthKind::Command { program, args } = &def.health.kind else {
+            return;
+        };
+        match crate::health::check_command(program, args).await {
+            crate::health::CheckOutcome::Healthy => {
+                self.cmd_unhealthy_streak = 0;
+                self.update(|s| s.last_health = Some("cmd-ok".into()));
+            }
+            crate::health::CheckOutcome::Unhealthy(msg) => {
+                self.cmd_unhealthy_streak += 1;
+                let streak = self.cmd_unhealthy_streak;
+                self.update(|s| s.last_health = Some(format!("cmd-unhealthy({msg})")));
+                self.emit(
+                    EventTopic::ServiceHealth,
+                    serde_json::json!({"health": "unhealthy", "message": msg, "streak": streak}),
+                );
+                if streak >= def.health.failure_threshold.max(1) {
+                    tracing::warn!(
+                        service = %self.id,
+                        "命令探活连续 {streak} 次不健康，终止进程走自愈"
+                    );
+                    self.cmd_unhealthy_streak = 0;
+                    if let Some(job) = &self._job {
+                        let _ = job.terminate();
+                    }
+                }
+            }
         }
     }
 

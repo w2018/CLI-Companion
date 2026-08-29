@@ -8,6 +8,34 @@ use std::time::Duration;
 /// 指标采样周期：2 秒（CPU% 计算窗口）
 pub const SAMPLE_INTERVAL_MS: u64 = 2_000;
 
+/// 内存告警的最小重复间隔（同一服务两条告警之间）
+pub const MEM_ALERT_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// 内存告警是否应当触发
+///
+/// 条件：配置了阈值 && 有采样值 && 超过阈值 && 距上次告警 ≥ 冷却期。
+pub fn mem_alert_triggered(
+    alert_mb: Option<u32>,
+    mem_bytes: Option<u64>,
+    last_alert: Option<std::time::Instant>,
+) -> bool {
+    let Some(limit_mb) = alert_mb else {
+        return false;
+    };
+    let Some(bytes) = mem_bytes else {
+        return false;
+    };
+    let limit_bytes = (limit_mb as u64) * 1024 * 1024;
+    // 仅"严格超过"阈值才告警（等于阈值视为正常）
+    if bytes <= limit_bytes {
+        return false;
+    }
+    match last_alert {
+        Some(t) => t.elapsed() >= MEM_ALERT_COOLDOWN,
+        None => true,
+    }
+}
+
 /// CPU 占用率（0-100，按逻辑核数归一化）
 ///
 /// - 采样间隔过短（<0.5s）返回 None，调用方沿用上一次结果；
@@ -69,5 +97,23 @@ mod tests {
     #[test]
     fn 时间倒退丢弃窗口() {
         assert!(compute_cpu_percent(1_000, 999, Duration::from_secs(2), 8).is_none());
+    }
+
+    #[test]
+    fn 内存告警判定() {
+        use std::time::{Duration, Instant};
+        // 未配置阈值 / 无采样：不告警
+        assert!(!mem_alert_triggered(None, Some(9_999_999_999), None));
+        assert!(!mem_alert_triggered(Some(512), None, None));
+        // 未超阈值：不告警
+        assert!(!mem_alert_triggered(Some(512), Some(512 * 1024 * 1024), None));
+        // 超阈值首次：告警
+        let over = 513 * 1024 * 1024;
+        assert!(mem_alert_triggered(Some(512), Some(over), None));
+        // 冷却期内：不重复告警
+        assert!(!mem_alert_triggered(Some(512), Some(over), Some(Instant::now())));
+        // 冷却期已过：再次告警
+        let past = Instant::now() - Duration::from_secs(601);
+        assert!(mem_alert_triggered(Some(512), Some(over), Some(past)));
     }
 }

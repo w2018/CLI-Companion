@@ -92,6 +92,17 @@ export function ServiceForm({ initial, onClose }: Props) {
     }
   };
 
+  // v2.2.0 任务6：探活方式（kind 序列化：进程为字符串 "process"，命令为 {command:{program,args}}）
+  const healthKind = svc.health.kind as
+    | string
+    | { command?: { program: string; args: string[] } }
+    | null
+    | undefined;
+  const healthIsCommand = typeof healthKind === "object" && healthKind !== null && "command" in healthKind;
+  const healthCmd = healthIsCommand
+    ? (healthKind as { command: { program: string; args: string[] } }).command
+    : null;
+
   /** v2.2.0 任务1：粘贴整条命令行 → 解析填充 exe 与参数编辑器 */
   const [pasteInput, setPasteInput] = useState("");
   const applyPastedCommand = () => {
@@ -343,6 +354,75 @@ export function ServiceForm({ initial, onClose }: Props) {
                 </label>
               </Field>
             </div>
+
+            {/* v2.2.0 任务5/6：探活与告警 */}
+            <div className="grid grid-cols-3 gap-3">
+              <Field label="探活方式">
+                <select
+                  className={inputCls}
+                  value={healthIsCommand ? "command" : "process"}
+                  onChange={(e) => {
+                    if (e.target.value === "command") {
+                      set("health", {
+                        ...svc.health,
+                        kind: { command: { program: "", args: [] } },
+                      });
+                    } else {
+                      set("health", { ...svc.health, kind: "process" });
+                    }
+                  }}
+                >
+                  <option value="process">进程存活（默认）</option>
+                  <option value="command">自定义命令（退出码 0 = 健康）</option>
+                </select>
+              </Field>
+              <Field label="探活命令程序">
+                <input
+                  className={`${inputCls} font-mono text-xs`}
+                  disabled={!healthIsCommand}
+                  value={healthCmd?.program ?? ""}
+                  onChange={(e) =>
+                    set("health", {
+                      ...svc.health,
+                      kind: { command: { program: e.target.value, args: healthCmd?.args ?? [] } },
+                    })
+                  }
+                  placeholder={healthIsCommand ? "如 mysqladmin" : "仅命令探活时使用"}
+                />
+              </Field>
+              <Field label="内存告警阈值（MB，留空关闭）">
+                <input
+                  className={inputCls}
+                  type="number"
+                  min={0}
+                  value={svc.mem_alert_mb ?? ""}
+                  onChange={(e) =>
+                    set("mem_alert_mb", e.target.value ? Number(e.target.value) : null)
+                  }
+                  placeholder="如 1024"
+                />
+              </Field>
+            </div>
+            {healthIsCommand && (
+              <Field label="探活命令参数（空格分隔）">
+                <input
+                  className={`${inputCls} font-mono text-xs`}
+                  value={(healthCmd?.args ?? []).join(" ")}
+                  onChange={(e) =>
+                    set("health", {
+                      ...svc.health,
+                      kind: {
+                        command: {
+                          program: healthCmd?.program ?? "",
+                          args: e.target.value.split(" ").filter(Boolean),
+                        },
+                      },
+                    })
+                  }
+                  placeholder="如 ping -h localhost"
+                />
+              </Field>
+            )}
           </fieldset>
 
           {/* ===== 参数与环境 ===== */}
@@ -429,7 +509,11 @@ function EnvEditor({ env, onChange }: { env: EnvVar[]; onChange: (next: EnvVar[]
                 <span className="w-14 shrink-0 text-xs text-muted">值</span>
                 <input
                   aria-label={`变量 ${i + 1} 值`}
-                  placeholder="值"
+                  placeholder={
+                    v.secret && v.value === "__encrypted__"
+                      ? "已加密保存（输入可更新，清空即删除）"
+                      : "值"
+                  }
                   type={v.secret ? "password" : "text"}
                   value={v.value}
                   onChange={(e) => update(i, { value: e.target.value })}
