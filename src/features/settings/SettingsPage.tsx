@@ -85,6 +85,23 @@ export function SettingsPage() {
     }
   };
 
+  // ===== v2.2.0 任务2：自动备份历史与一键回滚（hook 必须在提前 return 之前） =====
+  const backups = useQuery({
+    queryKey: ["backups"],
+    queryFn: () =>
+      rpc<{ backups: { name: string; ts: string; size: number }[] }>("backup.list"),
+  });
+  const restoreBackup = async (name: string) => {
+    if (!window.confirm("确定回滚到该备份吗？回滚前会把当前配置再自动备份一份。")) return;
+    try {
+      await rpc("backup.restore", { name });
+      pushToast("ok", "已回滚到所选备份");
+      void qc.invalidateQueries();
+    } catch (e) {
+      pushToast("err", describeError(e as never));
+    }
+  };
+
   // ===== daemon 启停 =====
   const { state: daemonState } = useDaemonConnection();
   const startDaemon = async () => {
@@ -172,23 +189,6 @@ export function SettingsPage() {
       pushToast("err", describeError(e as never));
     } finally {
       setBusy(false);
-    }
-  };
-
-  // v2.2.0 任务2：自动备份历史与一键回滚
-  const backups = useQuery({
-    queryKey: ["backups"],
-    queryFn: () =>
-      rpc<{ backups: { name: string; ts: string; size: number }[] }>("backup.list"),
-  });
-  const restoreBackup = async (name: string) => {
-    if (!window.confirm("确定回滚到该备份吗？回滚前会把当前配置再自动备份一份。")) return;
-    try {
-      await rpc("backup.restore", { name });
-      pushToast("ok", "已回滚到所选备份");
-      void qc.invalidateQueries();
-    } catch (e) {
-      pushToast("err", describeError(e as never));
     }
   };
 
