@@ -177,7 +177,7 @@ function ServiceOverviewRow({
         {/* 运行中：资源指标（CPU/内存/GPU/磁盘/网络，按占用变色）与运行时长并排展示 */}
         {isRunning && (
           <span className="ml-auto inline-flex items-center gap-3">
-            <MetricChips metric={metric} />
+            <MetricChips metric={metric} className="text-[10px]" />
             <span className="inline-flex items-center gap-1 text-xs text-ok">
               <Clock size={12} aria-hidden />
               已运行 {formatDuration(row.runtime.started_at)}

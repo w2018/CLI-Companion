@@ -41,7 +41,14 @@ function Chip({
 }
 
 /** 服务行内的一组资源指标；metric 缺省或全部字段缺省时渲染 null */
-export function MetricChips({ metric }: { metric?: ServiceMetric }) {
+export function MetricChips({
+  metric,
+  className,
+}: {
+  metric?: ServiceMetric;
+  /** 覆盖根节点字号等样式（如服务管理页传 text-[8px]）；缺省 text-[10px] */
+  className?: string;
+}) {
   if (!metric) return null;
   const chips: { key: string; node: ReactElement }[] = [];
 
@@ -122,7 +129,9 @@ export function MetricChips({ metric }: { metric?: ServiceMetric }) {
 
   if (chips.length === 0) return null;
   return (
-    <span className="inline-flex items-center gap-x-1.5 whitespace-nowrap font-mono text-[10px]">
+    <span
+      className={`inline-flex items-center gap-x-1.5 whitespace-nowrap font-mono ${className ?? "text-[10px]"}`}
+    >
       {chips.map((c, i) => (
         <Fragment key={c.key}>
           {i > 0 && (

@@ -222,8 +222,10 @@ export function ServiceList() {
                   </p>
                   {row.runtime.status === "running" && row.runtime.pid != null && (
                     <p className="mt-0.5 flex items-center gap-x-2 overflow-hidden whitespace-nowrap text-xs text-muted">
-                      <span className="shrink-0">PID {row.runtime.pid}</span>
-                      <MetricChips metric={metricOf(row.service.id)} />
+                      <span className="shrink-0 font-mono text-[10px] text-err">
+                        PID {row.runtime.pid}
+                      </span>
+                      <MetricChips metric={metricOf(row.service.id)} className="text-[8px]" />
                     </p>
                   )}
                 </div>
