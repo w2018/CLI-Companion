@@ -122,6 +122,54 @@ describe("MetricsSchema", () => {
     });
     expect(r.success).toBe(true);
   });
+
+  it("v2.4.0 扩展指标字段可解析（旧载荷缺省兼容）", async () => {
+    const { MetricsSchema } = await import("./schema");
+    // 旧 daemon 载荷（无任何新字段）照常解析
+    expect(MetricsSchema.safeParse({ metrics: [{ service_id: "a" }] }).success).toBe(true);
+    // 新 daemon 载荷全字段解析
+    const r = MetricsSchema.safeParse({
+      metrics: [
+        {
+          service_id: "a",
+          cpu_percent: 3.1,
+          mem_bytes: 1048576,
+          mem_percent: 0.05,
+          gpu_percent: 12,
+          gpu_mem_bytes: 52428800,
+          disk_read_bytes_per_sec: 1024,
+          disk_write_bytes_per_sec: 2048,
+          net_rx_bytes_per_sec: 4096,
+          net_tx_bytes_per_sec: 8192,
+        },
+      ],
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.metrics[0].gpu_percent).toBe(12);
+      expect(r.data.metrics[0].mem_percent).toBe(0.05);
+      expect(r.data.metrics[0].net_tx_bytes_per_sec).toBe(8192);
+    }
+  });
+
+  it("runtime v2.4.0 扩展字段可解析（旧载荷缺省兼容）", async () => {
+    const { RuntimeStateSchema } = await import("./schema");
+    expect(
+      RuntimeStateSchema.safeParse({
+        status: "running",
+        restart_count: 0,
+        restarts_recent_10m: 0,
+      }).success,
+    ).toBe(true);
+    const r = RuntimeStateSchema.safeParse({
+      status: "running",
+      restart_count: 0,
+      restarts_recent_10m: 0,
+      gpu_percent: 7.5,
+      disk_write_bytes_per_sec: 4096,
+    });
+    expect(r.success).toBe(true);
+  });
 });
 
 describe("SyncStatusSchema", () => {

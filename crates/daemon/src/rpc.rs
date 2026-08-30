@@ -422,7 +422,7 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
             }
         }
 
-        // 资源指标：从 actor 运行时状态取最近一次 CPU / 内存采样
+        // 资源指标：从 actor 运行时状态取最近一次采样（CPU / 内存 / GPU / 磁盘 / 网络）
         M::ServiceMetrics => {
             let runtimes = state.manager.all_runtimes();
             let metrics = runtimes
@@ -431,6 +431,13 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
                     service_id: id.to_string(),
                     cpu_percent: rt.cpu_percent,
                     mem_bytes: rt.mem_bytes,
+                    mem_percent: rt.mem_percent,
+                    gpu_percent: rt.gpu_percent,
+                    gpu_mem_bytes: rt.gpu_mem_bytes,
+                    disk_read_bytes_per_sec: rt.disk_read_bytes_per_sec,
+                    disk_write_bytes_per_sec: rt.disk_write_bytes_per_sec,
+                    net_rx_bytes_per_sec: rt.net_rx_bytes_per_sec,
+                    net_tx_bytes_per_sec: rt.net_tx_bytes_per_sec,
                 })
                 .collect();
             serde_json::to_value(MetricsResult { metrics }).map_err(|e| internal(e.to_string()))

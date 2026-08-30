@@ -95,6 +95,14 @@ export const RuntimeStateSchema = z.object({
   // v2.1.0 资源监控采样（仅运行中服务有值）
   cpu_percent: z.number().optional().nullable(),
   mem_bytes: z.number().optional().nullable(),
+  // v2.4.0 扩展指标（旧 daemon 缺省兼容）
+  mem_percent: z.number().optional().nullable(),
+  gpu_percent: z.number().optional().nullable(),
+  gpu_mem_bytes: z.number().optional().nullable(),
+  disk_read_bytes_per_sec: z.number().optional().nullable(),
+  disk_write_bytes_per_sec: z.number().optional().nullable(),
+  net_rx_bytes_per_sec: z.number().optional().nullable(),
+  net_tx_bytes_per_sec: z.number().optional().nullable(),
 });
 export type RuntimeState = z.infer<typeof RuntimeStateSchema>;
 
@@ -103,6 +111,14 @@ export const ServiceMetricSchema = z.object({
   service_id: z.string(),
   cpu_percent: z.number().optional().nullable(),
   mem_bytes: z.number().optional().nullable(),
+  // v2.4.0 扩展指标（旧 daemon 缺省兼容）
+  mem_percent: z.number().optional().nullable(),
+  gpu_percent: z.number().optional().nullable(),
+  gpu_mem_bytes: z.number().optional().nullable(),
+  disk_read_bytes_per_sec: z.number().optional().nullable(),
+  disk_write_bytes_per_sec: z.number().optional().nullable(),
+  net_rx_bytes_per_sec: z.number().optional().nullable(),
+  net_tx_bytes_per_sec: z.number().optional().nullable(),
 });
 export type ServiceMetric = z.infer<typeof ServiceMetricSchema>;
 

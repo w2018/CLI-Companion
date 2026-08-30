@@ -6,15 +6,20 @@
 
 use crate::dirs::DataDirs;
 use crate::events::{make_event, EventTx};
-use crate::metrics::{compute_cpu_percent, SAMPLE_INTERVAL_MS};
+use crate::metrics::{
+    compute_mem_percent, compute_rate_per_sec, compute_tree_cpu_percent, SAMPLE_INTERVAL_MS,
+};
 use crate::notify;
 use chrono::Utc;
 use cli_companion_domain::{
     Backoff, RestartPolicy, RuntimeState, ServiceDefinition, ServiceId, ServiceStatus,
 };
 use cli_companion_platform::console::creation_flags;
+use cli_companion_platform::gpu::GpuMonitor;
 use cli_companion_platform::job::Job;
+use cli_companion_platform::net::NetMonitor;
 use cli_companion_platform::process;
+use cli_companion_platform::sysinfo;
 use cli_companion_protocol::EventTopic;
 use std::collections::HashMap;
 #[cfg(windows)]
@@ -69,10 +74,16 @@ struct Actor {
     events: Arc<EventTx>,
     /// daemon 是否以 Win32 服务运行（session 0 收不到 Toast）
     as_service: bool,
-    /// 上次采样的进程 CPU 累计时间（100ns；CPU% 计算基线）
-    last_cpu_100ns: Option<u64>,
+    /// 进程树 CPU 累计时间基线（pid → 100ns；树聚合差分用）
+    last_cpu_tree: HashMap<u32, u64>,
     /// 上次采样时刻
     last_sample_at: Option<Instant>,
+    /// 磁盘 I/O 累计基线（读, 写 字节）
+    last_io: Option<(u64, u64)>,
+    /// TCP 流量采集器（按连接启用统计并维护差分基线）
+    net: NetMonitor,
+    /// GPU 监控器（PDH 查询按服务持有）
+    gpu: GpuMonitor,
     /// 上次内存告警时刻（v2.2.0，10 分钟冷却）
     last_mem_alert: Option<Instant>,
     /// 命令探活连续不健康次数（v2.2.0，达到 failure_threshold 终止进程走自愈）
@@ -99,8 +110,11 @@ pub fn spawn_actor(
         restart_times: Vec::new(),
         events,
         as_service,
-        last_cpu_100ns: None,
+        last_cpu_tree: HashMap::new(),
         last_sample_at: None,
+        last_io: None,
+        net: NetMonitor::default(),
+        gpu: GpuMonitor::default(),
         last_mem_alert: None,
         cmd_unhealthy_streak: 0,
     };
@@ -374,6 +388,13 @@ impl Actor {
             s.last_exit_code = code;
             s.cpu_percent = None;
             s.mem_bytes = None;
+            s.mem_percent = None;
+            s.gpu_percent = None;
+            s.gpu_mem_bytes = None;
+            s.disk_read_bytes_per_sec = None;
+            s.disk_write_bytes_per_sec = None;
+            s.net_rx_bytes_per_sec = None;
+            s.net_tx_bytes_per_sec = None;
         });
         tracing::info!(service = %self.id, "服务已停止");
         Ok(())
@@ -390,34 +411,99 @@ impl Actor {
             s.last_exit_code = Some(code);
             s.cpu_percent = None;
             s.mem_bytes = None;
+            s.mem_percent = None;
+            s.gpu_percent = None;
+            s.gpu_mem_bytes = None;
+            s.disk_read_bytes_per_sec = None;
+            s.disk_write_bytes_per_sec = None;
+            s.net_rx_bytes_per_sec = None;
+            s.net_tx_bytes_per_sec = None;
         });
     }
 
-    /// 采样 CPU / 内存并写入运行时状态（进程刚退出时静默跳过）
+    /// 采样 CPU / 内存 / GPU / 磁盘 / 网络 并写入运行时状态（进程刚退出时静默跳过）
     fn sample_metrics(&mut self) {
         let Some(child) = &self.child else { return };
         let pid = child.id();
-        // CPU 取根进程（主 exe）累计时间；内存取 Job 进程树工作集之和
-        let cpu = process::snapshot(pid).ok().map(|s| s.cpu_time_100ns);
-        let mem = self.job_tree_mem_bytes(pid);
+        // CPU/内存/磁盘/网络全部聚合 Job 进程树：包装脚本、主-多进程型服务的
+        // 根进程常年空闲，仅采根进程会恒显 0（v2.4.0 修复 CPU 恒 0.0%）
+        let pids = self.job_tree_pids(pid);
         let now = Instant::now();
-        let cpu_pct = match (self.last_sample_at, self.last_cpu_100ns, cpu) {
-            (Some(prev_at), Some(prev_t), Some(now_t)) => {
-                let cores = std::thread::available_parallelism()
-                    .map(|n| n.get() as u64)
-                    .unwrap_or(1);
-                compute_cpu_percent(prev_t, now_t, now - prev_at, cores)
+
+        // CPU：按 PID 逐个差分（新出现的子进程本窗口计 0，避免携带历史累计值造成毛刺）
+        let mut cpu_tree: HashMap<u32, u64> = HashMap::new();
+        for p in &pids {
+            if let Ok(s) = process::snapshot(*p) {
+                cpu_tree.insert(*p, s.cpu_time_100ns);
             }
-            _ => None, // 首次采样无基线
+        }
+        let mut cpu_delta_100ns = 0u64;
+        for (p, now_t) in &cpu_tree {
+            if let Some(prev_t) = self.last_cpu_tree.get(p) {
+                if now_t > prev_t {
+                    cpu_delta_100ns += now_t - prev_t;
+                }
+            }
+        }
+        let mem = self.job_tree_mem_bytes(&pids);
+        let io = self.job_tree_io_bytes(&pids);
+        // 网络：采集器内部按连接启用统计并返回本窗口收发增量
+        let net_delta = self.net.sample(&pids);
+        let gpu = self.gpu.sample(&pids);
+
+        let elapsed = self.last_sample_at.map(|t| now - t);
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get() as u64)
+            .unwrap_or(1);
+        let cpu_pct = elapsed.and_then(|el| compute_tree_cpu_percent(cpu_delta_100ns, el, cores));
+        // 速率类指标：差分 / 间隔；首次采样或本次无数据时为 None（沿用上次值）
+        let (disk_read, disk_write) = match (elapsed, self.last_io, io) {
+            (Some(el), Some((pr, pw)), Some((r, w))) => (
+                compute_rate_per_sec(pr, r, el),
+                compute_rate_per_sec(pw, w, el),
+            ),
+            _ => (None, None),
         };
-        self.last_sample_at = cpu.as_ref().map(|_| now);
-        self.last_cpu_100ns = cpu;
+        // 网络速率：窗口增量 / 间隔；间隔异常过短时为 None（沿用上次值）
+        let (net_rx, net_tx) = match elapsed {
+            Some(el) => (
+                compute_rate_per_sec(0, net_delta.in_bytes, el),
+                compute_rate_per_sec(0, net_delta.out_bytes, el),
+            ),
+            None => (None, None),
+        };
+        // 内存占系统物理内存百分比
+        let mem_pct = mem.and_then(|b| compute_mem_percent(b, sysinfo::total_phys_bytes()));
+
+        self.last_sample_at = Some(now);
+        self.last_cpu_tree = cpu_tree;
+        self.last_io = io;
+
         self.update(|s| {
-            // CPU% 无基线时保持上次值，避免界面跳动
+            // CPU% 无基线时保持上次值，避免界面跳动（速率类指标同策略）
             if let Some(p) = cpu_pct {
                 s.cpu_percent = Some(p);
             }
             s.mem_bytes = mem;
+            if let Some(p) = mem_pct {
+                s.mem_percent = Some(p);
+            }
+            if let Some(r) = disk_read {
+                s.disk_read_bytes_per_sec = Some(r);
+            }
+            if let Some(w) = disk_write {
+                s.disk_write_bytes_per_sec = Some(w);
+            }
+            if let Some(r) = net_rx {
+                s.net_rx_bytes_per_sec = Some(r);
+            }
+            if let Some(t) = net_tx {
+                s.net_tx_bytes_per_sec = Some(t);
+            }
+            if let Some(g) = gpu {
+                s.gpu_percent = Some(g.percent);
+                s.gpu_mem_bytes = Some(g.mem_bytes);
+            }
         });
         // v2.2.0：内存告警（阈值 + 10 分钟冷却，走既有通知通道）
         if let Some(def) = &self.current_def {
@@ -444,15 +530,19 @@ impl Actor {
         }
     }
 
-    /// Job 进程树的内存工作集之和；Job 查询失败时退化为仅根进程
-    fn job_tree_mem_bytes(&self, root_pid: u32) -> Option<u64> {
-        let pids = match &self._job {
+    /// Job 进程树 PID 列表；Job 查询失败时退化为仅根进程
+    fn job_tree_pids(&self, root_pid: u32) -> Vec<u32> {
+        match &self._job {
             Some(job) => job.process_ids().unwrap_or_else(|_| vec![root_pid]),
             None => vec![root_pid],
-        };
+        }
+    }
+
+    /// Job 进程树的内存工作集之和
+    fn job_tree_mem_bytes(&self, pids: &[u32]) -> Option<u64> {
         let mut total = 0u64;
         let mut any = false;
-        for p in &pids {
+        for p in pids {
             if let Ok(snap) = process::snapshot(*p) {
                 total += snap.working_set_bytes;
                 any = true;
@@ -461,10 +551,27 @@ impl Actor {
         any.then_some(total)
     }
 
+    /// Job 进程树的磁盘 I/O 累计（读, 写）；全部 PID 读取失败时返回 None
+    fn job_tree_io_bytes(&self, pids: &[u32]) -> Option<(u64, u64)> {
+        let mut read = 0u64;
+        let mut write = 0u64;
+        let mut any = false;
+        for p in pids {
+            if let Ok(snap) = process::io_snapshot(*p) {
+                read = read.saturating_add(snap.read_bytes);
+                write = write.saturating_add(snap.write_bytes);
+                any = true;
+            }
+        }
+        any.then_some((read, write))
+    }
+
     /// 清空采样基线（进程退出后基线失效）
     fn clear_metrics(&mut self) {
-        self.last_cpu_100ns = None;
+        self.last_cpu_tree.clear();
         self.last_sample_at = None;
+        self.last_io = None;
+        self.net.reset();
     }
 
     /// 当前定义的服务名（用于通知文案；无定义时回退为 ID）

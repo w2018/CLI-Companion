@@ -177,6 +177,28 @@ async fn 管道rpc全链路与服务生命周期() {
     .unwrap();
     assert!(logs["total"].as_u64().unwrap() > 0, "日志应有内容");
 
+    // ===== 5.5 service.metrics（跨过首个 2s 采样点：运行中应有内存采样，扩展字段类型合法）=====
+    tokio::time::sleep(Duration::from_millis(1300)).await;
+    let metrics = rpc_call(Method::ServiceMetrics, None).await.unwrap();
+    let entry = metrics["metrics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["service_id"] == json!(sid))
+        .expect("指标应包含运行中的服务");
+    let mem = entry["mem_bytes"].as_u64().expect("运行中服务应有内存采样");
+    assert!(mem > 0, "内存采样应为正: {mem}");
+    if let Some(cpu) = entry["cpu_percent"].as_f64() {
+        assert!((0.0..=100.0).contains(&cpu), "CPU 占用越界: {cpu}");
+    }
+    if let Some(g) = entry["gpu_percent"].as_f64() {
+        assert!((0.0..=100.0).contains(&g), "GPU 占用越界: {g}");
+    }
+    // PING 仅 ICMP 流量：TCP 口径的网络速率即便出现也应近 0（口径串扰粗检）
+    if let Some(v) = entry["net_rx_bytes_per_sec"].as_u64() {
+        assert!(v < 1024 * 1024, "ICMP 服务的网络接收速率应近 0: {v}");
+    }
+
     // ===== 6. service.stop =====
     rpc_call(Method::ServiceStop, Some(json!({ "service_id": sid })))
         .await
@@ -193,6 +215,22 @@ async fn 管道rpc全链路与服务生命周期() {
     assert!(stopped, "服务应进入 stopped 状态");
     // 进程确实不存在了
     assert!(!process_alive(pid as u32), "停止后进程应不存在");
+
+    // ===== 6.5 停止后指标字段应清空（None 缺省不序列化）=====
+    let metrics = rpc_call(Method::ServiceMetrics, None).await.unwrap();
+    if let Some(entry) = metrics["metrics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["service_id"] == json!(sid))
+    {
+        assert!(entry.get("mem_bytes").is_none(), "停止后内存指标应清空");
+        assert!(
+            entry.get("net_rx_bytes_per_sec").is_none(),
+            "停止后网络指标应清空"
+        );
+        assert!(entry.get("cpu_percent").is_none(), "停止后 CPU 指标应清空");
+    }
 
     // ===== 7. service.delete =====
     rpc_call(Method::ServiceDelete, Some(json!({ "service_id": sid })))

@@ -23,9 +23,9 @@ import { useServices, useServiceAction, useServiceMetrics } from "../../shared/h
 import { StatusBadge } from "../../shared/components/StatusBadge";
 import { EmptyState } from "../../shared/components/EmptyState";
 import { ConfirmDialog } from "../../shared/components/ConfirmDialog";
+import { MetricChips } from "../../shared/components/MetricChips";
 import { useUiStore } from "../../stores/uiStore";
 import { describeError } from "../../shared/rpc/errors";
-import { formatBytes } from "../../shared/utils/format";
 import { ServiceForm } from "./ServiceForm";
 import type { ServiceRow } from "../../shared/rpc/schema";
 import type { MethodName } from "../../shared/rpc/client";
@@ -221,12 +221,9 @@ export function ServiceList() {
                     {row.service.args.length > 0 && " …"}
                   </p>
                   {row.runtime.status === "running" && row.runtime.pid != null && (
-                    <p className="mt-0.5 text-xs text-muted">
-                      PID {row.runtime.pid}
-                      {metricOf(row.service.id)?.cpu_percent != null &&
-                        ` · CPU ${metricOf(row.service.id)!.cpu_percent!.toFixed(1)}%`}
-                      {metricOf(row.service.id)?.mem_bytes != null &&
-                        ` · 内存 ${formatBytes(metricOf(row.service.id)!.mem_bytes)}`}
+                    <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted">
+                      <span>PID {row.runtime.pid}</span>
+                      <MetricChips metric={metricOf(row.service.id)} />
                     </p>
                   )}
                 </div>

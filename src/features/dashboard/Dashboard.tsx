@@ -14,7 +14,8 @@ import { rpc } from "../../shared/rpc/client";
 import { useDaemonConnection, useServices, useServiceMetrics } from "../../shared/hooks/useDaemon";
 import { StatusBadge } from "../../shared/components/StatusBadge";
 import { EmptyState } from "../../shared/components/EmptyState";
-import { formatDateTime, formatDuration, formatBytes } from "../../shared/utils/format";
+import { MetricChips } from "../../shared/components/MetricChips";
+import { formatDateTime, formatDuration } from "../../shared/utils/format";
 import type { ServiceRow, ServiceMetric } from "../../shared/rpc/schema";
 
 interface InfoResult {
@@ -173,15 +174,10 @@ function ServiceOverviewRow({
         ) : (
           <StatusBadge status={row.runtime.status} />
         )}
-        {/* 运行中：资源指标与运行时长并排展示（指标未就绪时只显示时长） */}
+        {/* 运行中：资源指标（CPU/内存/GPU/磁盘/网络，按占用变色）与运行时长并排展示 */}
         {isRunning && (
           <span className="ml-auto inline-flex items-center gap-3">
-            {metric && (metric.cpu_percent != null || metric.mem_bytes != null) && (
-              <span className="font-mono text-xs text-muted">
-                {metric.cpu_percent != null && <>CPU {metric.cpu_percent.toFixed(1)}% · </>}
-                {metric.mem_bytes != null && <>内存 {formatBytes(metric.mem_bytes)}</>}
-              </span>
-            )}
+            <MetricChips metric={metric} />
             <span className="inline-flex items-center gap-1 text-xs text-ok">
               <Clock size={12} aria-hidden />
               已运行 {formatDuration(row.runtime.started_at)}
