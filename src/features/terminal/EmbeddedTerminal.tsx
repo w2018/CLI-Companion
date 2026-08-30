@@ -1,9 +1,11 @@
-// v2.2.0 任务9 / v2.3.0 增强：内嵌终端（xterm.js + daemon ConPTY）
-// 会话链路：xterm onData → pty_write → PTY；PTY 输出 → pty-output:<id> → xterm
-// - 会话保持：返回页面不终止，重进自动 attach 并回放缓冲；仅「关闭会话」终止
-// - 复制粘贴：左键选中即复制、右键粘贴；Ctrl+Shift+C/V 同样可用
-// - 自动换行：DECAWM 模式开关（ESC[?7h / ESC[?7l）
-// - 内置主题：6 套可切换（含明显的选区配色）
+// 内嵌终端（xterm.js + daemon ConPTY）—— v2.4.0 架构重构
+//
+// 核心设计：**终端实例常驻内存，页面只是它的"临时显示窗口"**。
+// 旧方案每次进页面新建 Terminal 并回放字节流——回放的是历史几何下的 VT 差分，
+// 注入全新 xterm 后屏幕必然错位（输入行跑出可视区），且依赖 PTY resize 链路。
+// 新方案：Terminal 实例存放在模块级 sessions 表中，离开页面只把 DOM 摘下来，
+// 重进时把同一个 DOM 挂回去——屏幕/光标/滚动/选区零丢失，几何从不变化。
+// 会话保持、主题、复制粘贴、自动换行等既有想法全部保留。
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import { Terminal } from "@xterm/xterm";
@@ -15,16 +17,6 @@ import { useServices } from "../../shared/hooks/useDaemon";
 
 /** 内置主题：选区配色 = 前景/背景互换（相反色），保证选区文字任何情况下可见 */
 const THEMES = {
-  dark: {
-    label: "深色（默认）",
-    background: "#101418",
-    foreground: "#d6dae0",
-    cursor: "#5fb3ff",
-    cursorAccent: "#101418",
-    selectionBackground: "#d6dae0",
-    selectionForeground: "#101418",
-    selectionInactiveBackground: "#4a545e",
-  },
   solarizedDark: {
     label: "Solarized Dark（默认）",
     background: "#002b36",
@@ -34,6 +26,16 @@ const THEMES = {
     selectionBackground: "#93a1a1",
     selectionForeground: "#002b36",
     selectionInactiveBackground: "#0e4449",
+  },
+  dark: {
+    label: "深色",
+    background: "#101418",
+    foreground: "#d6dae0",
+    cursor: "#5fb3ff",
+    cursorAccent: "#101418",
+    selectionBackground: "#d6dae0",
+    selectionForeground: "#101418",
+    selectionInactiveBackground: "#4a545e",
   },
   solarizedLight: {
     label: "Solarized Light",
@@ -91,13 +93,26 @@ function loadStored<T extends string>(key: string, fallback: T, valid: readonly 
   }
 }
 
+/** 常驻终端会话：生命周期独立于页面挂载 */
+interface TerminalSession {
+  term: Terminal;
+  fit: FitAddon;
+  ptyId: number | null;
+  exited: boolean;
+  /** 连接完成后的解绑函数（只在创建时接线一次） */
+  unlisten: (() => void)[];
+  connecting: Promise<void> | null;
+}
+
+/** 模块级会话表：key = 服务 ID。页面进出只增删 DOM，不销毁实例 */
+const sessions = new Map<string, TerminalSession>();
+
 export function EmbeddedTerminal() {
   const { serviceId = "" } = useParams();
   const navigate = useNavigate();
   const services = useServices();
   const serviceName = services.data?.find((r) => r.service.id === serviceId)?.service.name ?? "";
   const boxRef = useRef<HTMLDivElement>(null);
-  const termRef = useRef<Terminal | null>(null);
   const ptyIdRef = useRef<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -112,113 +127,122 @@ export function EmbeddedTerminal() {
     }
   });
 
-  // ===== 会话建立（attach 优先）+ 事件接线 =====
+  // ===== 挂载/重挂载：把会话终端接到页面 DOM 上（不新建、不销毁） =====
   useEffect(() => {
     const box = boxRef.current;
     if (!box) return;
     let disposed = false;
-    const unsubs: (() => void)[] = [];
-    const theme = THEMES[themeKey];
+    const cleanups: (() => void)[] = [];
 
-    const term = new Terminal({
-      fontSize: 12,
-      cursorBlink: true,
-      fontFamily: "Consolas, 'Courier New', monospace",
-      scrollback: 5000,
-      theme: { ...theme },
-    });
-    termRef.current = term;
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.open(box);
-
-    // 尺寸同步：布局与字体就绪后各校准一次，之后由 ResizeObserver / onResize 维持；
-    // PTY 与 xterm 行列数一致是"输入回显位置正确"的前提
-    const doFit = () => {
-      try {
-        fit.fit();
-        if (ptyIdRef.current != null) {
-          void invoke("pty_resize_cmd", {
-            id: ptyIdRef.current,
-            rows: term.rows,
-            cols: term.cols,
-          }).catch(() => {});
-        }
-      } catch {
-        // 容器尺寸非法（0）时忽略，下一轮再校
+    let sess = sessions.get(serviceId);
+    if (sess) {
+      // 重挂载：把既有终端 DOM 搬回来（屏幕状态完整保留）
+      if (sess.term.element && sess.term.element.parentElement !== box) {
+        box.appendChild(sess.term.element);
+        sess.term.scrollToBottom();
       }
-    };
-    requestAnimationFrame(doFit);
-    setTimeout(doFit, 200);
-
-    (async () => {
-      // 会话保持：先找该服务既有的 PTY 会话（返回即回放缓冲恢复屏幕）；没有才新开。
-      // 行列数用 xterm 首次 fit 后的实际值——PTY 与 UI 几何一致是回显正确的前提
-      const existing = await invoke<{ id: number; backlog: string } | null>("pty_attach", {
-        serviceId,
+      ptyIdRef.current = sess.ptyId;
+      if (sess.ptyId != null && !sess.exited) setReady(true);
+    } else {
+      // 首次进入：创建终端实例并连接 PTY（之后常驻）
+      const theme = THEMES[themeKey];
+      const term = new Terminal({
+        fontSize: 12,
+        cursorBlink: true,
+        fontFamily: "Consolas, 'Courier New', monospace",
+        scrollback: 5000,
+        theme: { ...theme },
       });
-      let id: number;
-      if (existing && typeof existing.id === "number") {
-        id = existing.id;
-        term.write(existing.backlog ?? "");
-      } else {
-        id = await invoke<number>("pty_open", {
+      const fit = new FitAddon();
+      term.loadAddon(fit);
+      term.open(box);
+      sess = { term, fit, ptyId: null, exited: false, unlisten: [], connecting: null };
+      sessions.set(serviceId, sess);
+      const session: TerminalSession = sess; // 闭包内使用的稳定引用（TS 收窄丢失）
+
+      session.connecting = (async () => {
+        // 行列数用 xterm 首次 fit 后的实际值——PTY 与 UI 几何一致是回显正确的前提
+        const id = await invoke<number>("pty_open", {
           serviceId,
           rows: term.rows,
           cols: term.cols,
         });
-      }
-      if (disposed) {
-        // 会话保留（不关闭），下次进入可继续
-        return;
-      }
-      ptyIdRef.current = id;
-      setReady(true);
+        if (disposed) return; // 整页卸载：会话仍保留
+        session.ptyId = id;
+        ptyIdRef.current = id;
+        setReady(true);
 
-      const offOut = await listen<string>(`pty-output:${id}`, (e) => {
-        term.write(e.payload);
-      });
-      const offExit = await listen(`pty-exit:${id}`, () => {
-        term.writeln("\r\n\x1b[90m[会话已结束]\x1b[0m");
-      });
-      const dataSub = term.onData((d) => {
-        void invoke("pty_write_cmd", { id, data: d }).catch(() => {});
-      });
-      const resizeSub = term.onResize(({ rows, cols }) => {
-        void invoke("pty_resize_cmd", { id, rows, cols }).catch(() => {});
-      });
+        const offOut = await listen<string>(`pty-output:${id}`, (e) => {
+          term.write(e.payload);
+        });
+        const offExit = await listen(`pty-exit:${id}`, () => {
+          session.exited = true;
+          term.writeln("\r\n\x1b[90m[会话已结束]\x1b[0m");
+        });
+        const dataSub = term.onData((d) => {
+          void invoke("pty_write_cmd", { id, data: d }).catch(() => {});
+          term.scrollToBottom(); // 输入时确保输入行可见
+        });
+        const resizeSub = term.onResize(({ rows, cols }) => {
+          void invoke("pty_resize_cmd", { id, rows, cols }).catch(() => {});
+        });
+        const selSub = term.onSelectionChange(() => {
+          // 左键选中即复制（Rust 侧 arboard，绕开 WebView2 剪贴板限制）
+          const sel = term.getSelection();
+          if (sel) void invoke("copy_to_clipboard", { text: sel }).catch(() => {});
+        });
+        session.unlisten.push(
+          () => offOut(),
+          () => offExit(),
+          () => dataSub.dispose(),
+          () => resizeSub.dispose(),
+          () => selSub.dispose(),
+        );
 
-      unsubs.push(
-        () => offOut(),
-        () => offExit(),
-        () => dataSub.dispose(),
-        () => resizeSub.dispose(),
-      );
+        // 自动换行初始状态同步给刚创建的终端
+        term.write(wrap ? "\x1b[?7h" : "\x1b[?7l");
+      })().catch((e) => {
+        setError(String(e));
+        term.writeln(`\x1b[31m终端启动失败: ${String(e)}\x1b[0m`);
+      });
+    }
 
-      doFit();
-      term.scrollToBottom();
-      const ro = new ResizeObserver(() => doFit());
-      ro.observe(box);
-      unsubs.push(() => ro.disconnect());
-    })().catch((e) => {
-      setError(String(e));
-      term.writeln(`\x1b[31m终端启动失败: ${String(e)}\x1b[0m`);
-    });
-
-    // ===== 复制粘贴：左键选中即复制（Rust 侧 arboard，绕开 WebView2 剪贴板限制）；
-    // 右键粘贴；Ctrl+Shift+C/V =====
-    const copySel = () => {
-      const sel = term.getSelection();
-      if (sel) {
-        void invoke("copy_to_clipboard", { text: sel }).catch(() => {});
+    // ===== 几何校准：rAF + 延迟 + ResizeObserver 三重触发 =====
+    // 终端容器零内边距（padding 会让 FitAddon 算出大于可视区的行列）
+    const doFit = () => {
+      if (disposed) return;
+      try {
+        sess.fit.fit();
+        if (sess.ptyId != null) {
+          void invoke("pty_resize_cmd", {
+            id: sess.ptyId,
+            rows: sess.term.rows,
+            cols: sess.term.cols,
+          }).catch(() => {});
+        }
+      } catch {
+        // 容器尺寸为 0（布局未完成）时忽略，下一轮再校
       }
     };
-    const selSub = term.onSelectionChange(copySel);
+    const raf = requestAnimationFrame(doFit);
+    const timer = setTimeout(doFit, 200);
+    const ro = new ResizeObserver(() => doFit());
+    ro.observe(box);
+    cleanups.push(() => {
+      cancelAnimationFrame(raf);
+      clearTimeout(timer);
+      ro.disconnect();
+    });
+
+    // ===== 右键粘贴（按页面挂载绑定；左右键习惯：左选复制/右键粘贴） =====
     const pasteClipboard = () => {
       navigator.clipboard
         .readText()
         .then((t) => {
-          if (t) void invoke("pty_write_cmd", { id: ptyIdRef.current, data: t }).catch(() => {});
+          if (t && sess.ptyId != null) {
+            void invoke("pty_write_cmd", { id: sess.ptyId, data: t }).catch(() => {});
+            sess.term.scrollToBottom();
+          }
         })
         .catch(() => {});
     };
@@ -227,40 +251,23 @@ export function EmbeddedTerminal() {
       pasteClipboard();
     };
     box.addEventListener("contextmenu", onCtx);
-    term.attachCustomKeyEventHandler(({ key, ctrlKey, shiftKey, type }) => {      if (type !== "keydown" || !ctrlKey || !shiftKey) return true;
-      const k = key.toLowerCase();
-      if (k === "c") {
-        copySel();
-        return false;
-      }
-      if (k === "v") {
-        pasteClipboard();
-        return false;
-      }
-      return true;
-    });
-    // attachCustomKeyEventHandler 随终端销毁自动清理，无需手动 dispose
-    unsubs.push(
-      () => selSub.dispose(),
-      () => box.removeEventListener("contextmenu", onCtx),
-    );
+    cleanups.push(() => box.removeEventListener("contextmenu", onCtx));
 
     return () => {
       disposed = true;
-      unsubs.forEach((f) => f());
-      // 会话保持：卸载只断开 UI，不终止 PTY；仅「关闭会话」按钮会真正关闭
-      term.dispose();
-      termRef.current = null;
+      cleanups.forEach((f) => f());
+      // 会话保持：卸载只摘 DOM，不终止 PTY、不销毁终端实例
     };
-    // themeKey 不参与此依赖：主题切换走独立 effect，避免重建会话
+    // themeKey/wrap 不参与此依赖：二者走独立 effect 热应用，避免重建会话
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serviceId]);
 
-  // ===== 主题切换（不重建会话，热应用）=====
+  // ===== 主题切换（热应用到当前会话终端）=====
   useEffect(() => {
     const theme = THEMES[themeKey];
-    if (termRef.current) {
-      termRef.current.options.theme = { ...theme };
+    const sess = serviceId ? sessions.get(serviceId) : undefined;
+    if (sess) {
+      sess.term.options.theme = { ...theme };
     }
     if (boxRef.current) {
       boxRef.current.style.background = theme.background;
@@ -268,30 +275,37 @@ export function EmbeddedTerminal() {
     try {
       localStorage.setItem(THEME_STORE_KEY, themeKey);
     } catch {
-      // 存储不可用时仅本次会话内生效
+      // 存储不可用时仅本次生效
     }
-  }, [themeKey]);
+  }, [themeKey, serviceId]);
 
   // ===== 自动换行（DECAWM）：开启 \x1b[?7h，关闭 \x1b[?7l =====
   useEffect(() => {
-    termRef.current?.write(wrap ? "\x1b[?7h" : "\x1b[?7l");
+    const sess = serviceId ? sessions.get(serviceId) : undefined;
+    sess?.term.write(wrap ? "\x1b[?7h" : "\x1b[?7l");
     try {
       localStorage.setItem(WRAP_STORE_KEY, wrap ? "1" : "0");
     } catch {
-      // 存储不可用时仅本次会话内生效
+      // 存储不可用时仅本次生效
     }
-  }, [wrap]);
+  }, [wrap, serviceId]);
 
-  /** 主动关闭会话（终止 PTY 并清空），返回服务列表 */
+  /** 主动关闭会话：终止 PTY、销毁终端实例并移出会话表，返回服务列表 */
   const closeSession = async () => {
-    if (ptyIdRef.current != null) {
-      try {
-        await invoke("pty_close_cmd", { id: ptyIdRef.current });
-      } catch {
-        // 会话可能已随子进程退出被清理
+    const sess = sessions.get(serviceId);
+    if (sess) {
+      if (sess.ptyId != null) {
+        try {
+          await invoke("pty_close_cmd", { id: sess.ptyId });
+        } catch {
+          // 会话可能已随子进程退出被清理
+        }
       }
-      ptyIdRef.current = null;
+      sess.unlisten.forEach((f) => f());
+      sess.term.dispose();
+      sessions.delete(serviceId);
     }
+    ptyIdRef.current = null;
     navigate("/services");
   };
 
@@ -312,7 +326,6 @@ export function EmbeddedTerminal() {
           {ready ? "已连接 · 返回页面会话保持，重新进入继续" : "连接中…"}
         </span>
 
-        {/* 主题 / 自动换行 / 关闭会话 */}
         <div className="ml-auto flex flex-wrap items-center gap-3 text-xs text-muted">
           <label className="flex items-center gap-1.5">
             主题
@@ -328,7 +341,10 @@ export function EmbeddedTerminal() {
               ))}
             </select>
           </label>
-          <label className="flex cursor-pointer items-center gap-1.5" title="关闭后长行不折行（DEC 自动换行模式切换）">
+          <label
+            className="flex cursor-pointer items-center gap-1.5"
+            title="关闭后长行不折行（DEC 自动换行模式切换）"
+          >
             <input
               type="checkbox"
               className="size-3.5 accent-[rgb(var(--accent))]"
@@ -355,13 +371,13 @@ export function EmbeddedTerminal() {
       )}
 
       <div
-        ref={boxRef}
         aria-label="内嵌终端内容"
-        // 注意：不加内边距——FitAddon 按容器尺寸计算行列，padding 会导致
-        // PTY 几何大于可视区，输入行跑到屏幕外
-        className="min-h-0 flex-1 overflow-hidden rounded-xl border border-surface-3"
+        className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-surface-3"
         style={{ background: THEMES[themeKey].background }}
-      />
+      >
+        {/* xterm 挂载点：absolute inset-0 保证 FitAddon 拿到的几何精确（零内边距） */}
+        <div ref={boxRef} className="absolute inset-0" />
+      </div>
       <p className="text-xs text-muted">
         左键选中即复制，右键粘贴（Ctrl+Shift+C/V 同样可用）· 会话以服务配置的环境变量与工作目录运行 ·
         返回页面会话保持，仅「关闭会话」终止并重置。
