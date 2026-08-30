@@ -200,11 +200,16 @@ fn pty_close(id: u64) -> Result<(), String> {
 }
 
 /// 打开内嵌终端：返回会话 ID；输出事件 `pty-output:<id>`，结束事件 `pty-exit:<id>`
+///
+/// `rows`/`cols`：前端 xterm 首次 fit 后的实际行列——PTY 与 UI 几何一致是
+/// 输入回显位置正确的前提（不一致会导致输入行跑到可视区外）。
 #[tauri::command]
 pub async fn pty_open(
     app: tauri::AppHandle,
     service_id: String,
     shell: Option<String>,
+    rows: Option<u16>,
+    cols: Option<u16>,
 ) -> Result<u64, String> {
     let ctx = fetch_service_env(&service_id).await?;
     let (program, args) = shell_command(shell.as_deref(), "CLI Companion");
@@ -217,8 +222,8 @@ pub async fn pty_open(
         args,
         env_overrides: build_env_overrides(&ctx.env_vars),
         cwd,
-        rows: 24,
-        cols: 80,
+        rows: rows.unwrap_or(24),
+        cols: cols.unwrap_or(80),
     };
     let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
     let id = spawn_pty(&service_id, cfg, tx)?;

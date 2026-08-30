@@ -112,3 +112,14 @@ pub async fn read_text_file(path: String) -> Result<String, String> {
 pub async fn write_text_file(path: String, contents: String) -> Result<(), String> {
     std::fs::write(&path, contents).map_err(|e| format!("写入失败: {e}"))
 }
+
+/// 复制文本到系统剪贴板（v2.3.0：内嵌终端左键选中即复制）
+///
+/// 走 Rust 侧 arboard 而非 navigator.clipboard——WebView2 对无激活手势的
+/// writeText 可能静默拒绝，拖选过程中时机不稳。
+#[tauri::command]
+pub async fn copy_to_clipboard(text: String) -> Result<(), String> {
+    arboard::Clipboard::new()
+        .and_then(|mut c| c.set_text(text))
+        .map_err(|e| format!("复制失败: {e}"))
+}

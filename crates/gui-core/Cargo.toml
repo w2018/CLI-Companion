@@ -18,6 +18,8 @@ cli-companion-platform.workspace = true
 tauri = { version = "2", features = ["tray-icon"] }
 # v2.2.0：内嵌终端 ConPTY
 portable-pty = "0.9"
+# v2.3.0：系统剪贴板（选中即复制，绕开 WebView2 剪贴板权限不确定性）
+arboard = "3"
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
 

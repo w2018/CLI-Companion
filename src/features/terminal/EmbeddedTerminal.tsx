@@ -13,7 +13,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useServices } from "../../shared/hooks/useDaemon";
 
-/** 内置主题（selection 必须与背景有足够对比，否则选区不可见） */
+/** 内置主题：选区配色 = 前景/背景互换（相反色），保证选区文字任何情况下可见 */
 const THEMES = {
   dark: {
     label: "深色（默认）",
@@ -21,26 +21,19 @@ const THEMES = {
     foreground: "#d6dae0",
     cursor: "#5fb3ff",
     cursorAccent: "#101418",
-    selectionBackground: "#2f4468",
-    selectionForeground: "#ffffff",
-  },
-  light: {
-    label: "浅色",
-    background: "#ffffff",
-    foreground: "#24292f",
-    cursor: "#1f6feb",
-    cursorAccent: "#ffffff",
-    selectionBackground: "#b6d7ff",
-    selectionForeground: "#1c1e21",
+    selectionBackground: "#d6dae0",
+    selectionForeground: "#101418",
+    selectionInactiveBackground: "#4a545e",
   },
   solarizedDark: {
-    label: "Solarized Dark",
+    label: "Solarized Dark（默认）",
     background: "#002b36",
     foreground: "#93a1a1",
     cursor: "#93a1a1",
     cursorAccent: "#002b36",
-    selectionBackground: "#274642",
-    selectionForeground: "#fdf6e3",
+    selectionBackground: "#93a1a1",
+    selectionForeground: "#002b36",
+    selectionInactiveBackground: "#0e4449",
   },
   solarizedLight: {
     label: "Solarized Light",
@@ -48,8 +41,19 @@ const THEMES = {
     foreground: "#586e75",
     cursor: "#657b83",
     cursorAccent: "#fdf6e3",
-    selectionBackground: "#dcd6c1",
-    selectionForeground: "#073642",
+    selectionBackground: "#586e75",
+    selectionForeground: "#fdf6e3",
+    selectionInactiveBackground: "#eee8d5",
+  },
+  light: {
+    label: "浅色",
+    background: "#ffffff",
+    foreground: "#24292f",
+    cursor: "#1f6feb",
+    cursorAccent: "#ffffff",
+    selectionBackground: "#24292f",
+    selectionForeground: "#ffffff",
+    selectionInactiveBackground: "#d0d7de",
   },
   hicon: {
     label: "高对比黑",
@@ -57,8 +61,9 @@ const THEMES = {
     foreground: "#eaeaea",
     cursor: "#ffffff",
     cursorAccent: "#000000",
-    selectionBackground: "#ffffff",
+    selectionBackground: "#eaeaea",
     selectionForeground: "#000000",
+    selectionInactiveBackground: "#555555",
   },
   green: {
     label: "经典绿屏",
@@ -66,8 +71,9 @@ const THEMES = {
     foreground: "#33ff66",
     cursor: "#33ff66",
     cursorAccent: "#0b1000",
-    selectionBackground: "#1e5c31",
-    selectionForeground: "#d9ffd9",
+    selectionBackground: "#33ff66",
+    selectionForeground: "#0b1000",
+    selectionInactiveBackground: "#1e5c31",
   },
 } as const;
 
@@ -96,7 +102,7 @@ export function EmbeddedTerminal() {
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [themeKey, setThemeKey] = useState<ThemeKey>(() =>
-    loadStored<ThemeKey>(THEME_STORE_KEY, "dark", Object.keys(THEMES) as ThemeKey[]),
+    loadStored<ThemeKey>(THEME_STORE_KEY, "solarizedDark", Object.keys(THEMES) as ThemeKey[]),
   );
   const [wrap, setWrap] = useState<boolean>(() => {
     try {
@@ -146,7 +152,8 @@ export function EmbeddedTerminal() {
     setTimeout(doFit, 200);
 
     (async () => {
-      // 会话保持：先找该服务既有的 PTY 会话（返回即回放缓冲恢复屏幕）；没有才新开
+      // 会话保持：先找该服务既有的 PTY 会话（返回即回放缓冲恢复屏幕）；没有才新开。
+      // 行列数用 xterm 首次 fit 后的实际值——PTY 与 UI 几何一致是回显正确的前提
       const existing = await invoke<{ id: number; backlog: string } | null>("pty_attach", {
         serviceId,
       });
@@ -155,7 +162,11 @@ export function EmbeddedTerminal() {
         id = existing.id;
         term.write(existing.backlog ?? "");
       } else {
-        id = await invoke<number>("pty_open", { serviceId });
+        id = await invoke<number>("pty_open", {
+          serviceId,
+          rows: term.rows,
+          cols: term.cols,
+        });
       }
       if (disposed) {
         // 会话保留（不关闭），下次进入可继续
@@ -194,20 +205,26 @@ export function EmbeddedTerminal() {
       term.writeln(`\x1b[31m终端启动失败: ${String(e)}\x1b[0m`);
     });
 
-    // ===== 复制粘贴：左键选中即复制；右键粘贴；Ctrl+Shift+C/V =====
+    // ===== 复制粘贴：左键选中即复制（Rust 侧 arboard，绕开 WebView2 剪贴板限制）；
+    // 右键粘贴；Ctrl+Shift+C/V =====
     const copySel = () => {
       const sel = term.getSelection();
-      if (sel) void navigator.clipboard.writeText(sel).catch(() => {});
+      if (sel) {
+        void invoke("copy_to_clipboard", { text: sel }).catch(() => {});
+      }
     };
     const selSub = term.onSelectionChange(copySel);
-    const onCtx = (e: MouseEvent) => {
-      e.preventDefault();
+    const pasteClipboard = () => {
       navigator.clipboard
         .readText()
         .then((t) => {
           if (t) void invoke("pty_write_cmd", { id: ptyIdRef.current, data: t }).catch(() => {});
         })
         .catch(() => {});
+    };
+    const onCtx = (e: MouseEvent) => {
+      e.preventDefault();
+      pasteClipboard();
     };
     box.addEventListener("contextmenu", onCtx);
     term.attachCustomKeyEventHandler(({ key, ctrlKey, shiftKey, type }) => {      if (type !== "keydown" || !ctrlKey || !shiftKey) return true;
@@ -217,12 +234,7 @@ export function EmbeddedTerminal() {
         return false;
       }
       if (k === "v") {
-        navigator.clipboard
-          .readText()
-          .then((t) => {
-            if (t) void invoke("pty_write_cmd", { id: ptyIdRef.current, data: t }).catch(() => {});
-          })
-          .catch(() => {});
+        pasteClipboard();
         return false;
       }
       return true;
@@ -345,7 +357,9 @@ export function EmbeddedTerminal() {
       <div
         ref={boxRef}
         aria-label="内嵌终端内容"
-        className="min-h-0 flex-1 overflow-hidden rounded-xl border border-surface-3 p-2"
+        // 注意：不加内边距——FitAddon 按容器尺寸计算行列，padding 会导致
+        // PTY 几何大于可视区，输入行跑到屏幕外
+        className="min-h-0 flex-1 overflow-hidden rounded-xl border border-surface-3"
         style={{ background: THEMES[themeKey].background }}
       />
       <p className="text-xs text-muted">

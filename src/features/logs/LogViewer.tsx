@@ -16,6 +16,8 @@ export function LogViewer() {
   const [logs, setLogs] = useState<LogsResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
+  // v2.3.0：自动换行开关（勾选=长行折行显示；不勾=单行横向滚动）
+  const [wrap, setWrap] = useState(true);
   const boxRef = useRef<HTMLPreElement>(null);
   const pushToast = useUiStore((s) => s.pushToast);
 
@@ -86,6 +88,15 @@ export function LogViewer() {
             />
             自动滚动
           </label>
+          <label className="flex items-center gap-2 text-sm text-muted">
+            <input
+              type="checkbox"
+              checked={wrap}
+              onChange={(e) => setWrap(e.target.checked)}
+              className="size-4 accent-[rgb(var(--accent))]"
+            />
+            自动换行
+          </label>
           {/* 日志清理：删除对应服务的本地 log 内容 */}
           <button
             onClick={() => void clearLogs()}
@@ -107,7 +118,9 @@ export function LogViewer() {
         role="log"
         aria-label="服务日志内容"
         onWheel={() => setAutoScroll(false)} // 用户滚动时暂停跟随
-        className="flex-1 overflow-auto rounded-xl border border-surface-3 bg-surface-2 p-4 font-mono text-xs leading-5"
+        className={`flex-1 overflow-auto rounded-xl border border-surface-3 bg-surface-2 p-4 font-mono text-xs leading-5 ${
+          wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"
+        }`}
       >
         {logs && logs.lines.length > 0 ? (
           logs.lines.join("\n")

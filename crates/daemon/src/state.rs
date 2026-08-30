@@ -135,10 +135,10 @@ pub async fn bootstrap(
             }
             Err(LockError::AlreadyRunning(p)) => {
                 // 管道可达 = 已有健康实例在正常服务：本实例无事可做，静默成功退出
-                // （不刷"检测到旧实例"日志——看门狗/自启/GUI 的冗余拉起都走这里，
-                // 属正常情况而非错误；ERROR 级退出还会在 main 里再打一行）
+                // （看门狗/自启/GUI 的冗余拉起都走这里，属正常情况而非错误；
+                //   用户要求完全屏蔽——降为 debug，info 级日志不再出现）
                 if crate::rpc::existing_daemon_alive().await {
-                    tracing::info!("已有 daemon 实例在服务，本实例退出");
+                    tracing::debug!("已有 daemon 实例在服务，本实例退出");
                     return Ok(());
                 }
                 // 管道不可达：旧实例可能正在退出，等待其释放锁后接管

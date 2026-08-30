@@ -1,8 +1,9 @@
-// 关于页：动态版本号、版本检测（GitHub Releases）、功能介绍、作者、开源地址、应用图标
+// 关于页：动态版本号、版本检测（GitHub Releases，按版本大小判断）、功能介绍、作者、开源地址、应用图标
 import { useCallback, useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Github, User, Sparkles, ExternalLink, RefreshCw, Download, CheckCircle2, AlertTriangle } from "lucide-react";
+import { isNewerVersion } from "../../shared/utils/version";
 
 const REPO_URL = "https://github.com/w2018/CLI-Companion";
 const RELEASES_URL = `${REPO_URL}/releases/latest`;
@@ -28,20 +29,6 @@ type UpdateState =
   | { kind: "latest" }
   | { kind: "available"; release: ReleaseInfo }
   | { kind: "error"; message: string };
-
-/** 解析 "v1.2.3" 风格版本号为可比较的数值三元组 */
-function parseVersion(v: string): [number, number, number] | null {
-  const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(v.trim());
-  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
-}
-
-/** 判断 latest 是否比 current 更新；任一版本号无法解析时返回 null（交由人工判断） */
-function isNewer(latest: string, current: string): boolean | null {
-  const a = parseVersion(latest);
-  const b = parseVersion(current);
-  if (!a || !b) return null;
-  return a[0] !== b[0] || a[1] !== b[1] || a[2] !== b[2];
-}
 
 export function AboutPage() {
   const [version, setVersion] = useState<string>("…");
@@ -74,7 +61,7 @@ export function AboutPage() {
           url: data.html_url ?? RELEASES_URL,
           publishedAt: data.published_at ?? null,
         };
-        const newer = isNewer(tag, version);
+        const newer = isNewerVersion(tag, version);
         // 版本号无法解析时不自动判定，展示新版本信息交给用户决定
         if (newer === false) {
           setUpdate({ kind: "latest" });

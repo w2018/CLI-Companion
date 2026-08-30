@@ -61,6 +61,8 @@ export function DaemonLogPage() {
   const [logs, setLogs] = useState<LogsResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
+  // v2.3.0：自动换行开关（勾选=长行折行显示；不勾=单行横向滚动）
+  const [wrap, setWrap] = useState(true);
   // 等级阈值筛选：ALL 显示全部；选某等级显示"该等级及更严重"
   const [minLevel, setMinLevel] = useState<"ALL" | Level>("ALL");
   const boxRef = useRef<HTMLDivElement>(null);
@@ -147,6 +149,15 @@ export function DaemonLogPage() {
             />
             自动滚动
           </label>
+          <label className="flex items-center gap-2 text-sm text-muted">
+            <input
+              type="checkbox"
+              checked={wrap}
+              onChange={(e) => setWrap(e.target.checked)}
+              className="size-4 accent-[rgb(var(--accent))]"
+            />
+            自动换行
+          </label>
           <button
             onClick={() => void clearLogs()}
             className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-err/40 px-3 text-sm text-err hover:bg-err/10"
@@ -167,16 +178,16 @@ export function DaemonLogPage() {
         role="log"
         aria-label="守护进程日志内容"
         onWheel={() => setAutoScroll(false)} // 用户滚动时暂停跟随
-        className="flex-1 overflow-auto rounded-xl border border-surface-3 bg-surface-2 p-4 font-mono text-xs leading-5"
+        className={`flex-1 overflow-auto rounded-xl border border-surface-3 bg-surface-2 p-4 font-mono text-xs leading-5 ${wrap ? "" : "overflow-x-auto"}`}
       >
         {visible.length > 0 ? (
           visible.map((l, i) =>
             l.level === null ? (
-              <div key={i} className="whitespace-pre-wrap text-muted">
+              <div key={i} className={wrap ? "whitespace-pre-wrap text-muted" : "whitespace-pre text-muted"}>
                 {l.rest}
               </div>
             ) : (
-              <div key={i} className="flex items-start gap-2 whitespace-pre-wrap">
+              <div key={i} className={`flex items-start gap-2 ${wrap ? "whitespace-pre-wrap" : "whitespace-pre"}`}>
                 <span className="shrink-0 text-muted">{l.time}</span>
                 <span
                   className={`shrink-0 rounded border px-1 text-[10px] leading-4 ${LEVEL_BADGE_CLS[l.level]}`}
