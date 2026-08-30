@@ -122,7 +122,7 @@ export function MetricChips({ metric }: { metric?: ServiceMetric }) {
 
   if (chips.length === 0) return null;
   return (
-    <span className="inline-flex flex-wrap items-center gap-x-2 font-mono text-xs">
+    <span className="inline-flex items-center gap-x-1.5 whitespace-nowrap font-mono text-[10px]">
       {chips.map((c, i) => (
         <Fragment key={c.key}>
           {i > 0 && (
