@@ -1,11 +1,17 @@
-// 内嵌终端（xterm.js + daemon ConPTY）—— v2.4.0 架构重构
+// 内嵌终端（xterm.js + daemon ConPTY）
 //
 // 核心设计：**终端实例常驻内存，页面只是它的"临时显示窗口"**。
-// 旧方案每次进页面新建 Terminal 并回放字节流——回放的是历史几何下的 VT 差分，
-// 注入全新 xterm 后屏幕必然错位（输入行跑出可视区），且依赖 PTY resize 链路。
-// 新方案：Terminal 实例存放在模块级 sessions 表中，离开页面只把 DOM 摘下来，
+// Terminal 实例存放在模块级 sessions 表中，离开页面只把 DOM 摘下来，
 // 重进时把同一个 DOM 挂回去——屏幕/光标/滚动/选区零丢失，几何从不变化。
-// 会话保持、主题、复制粘贴、自动换行等既有想法全部保留。
+//
+// v2.3.1 关键修复：必须引入 @xterm/xterm/css/xterm.css。xterm 6 的滚动容器、
+// 选区遮罩层、隐藏 textarea 全部依赖该样式表定位，此前从未引入导致：
+//   ① helper textarea 按浏览器默认样式占约 2 行文档流高度，文字行整体下移，
+//      底部输入行被容器裁掉（"终端高度超过框框"）；
+//   ② 选区遮罩层本应相对 .xterm 定位，却退而相对页面外层盒子定位，与下移后
+//      的文字错开约 2 行（"选第 1 行、第 3 行亮"）；
+//   ③ 选中文字需被提升到不透明遮罩之上的规则同样缺失，选区文字被遮罩盖住。
+import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import { Terminal } from "@xterm/xterm";
@@ -14,6 +20,7 @@ import { ArrowLeft, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useServices } from "../../shared/hooks/useDaemon";
+import { ConfirmDialog } from "../../shared/components/ConfirmDialog";
 
 /** 内置主题：选区配色 = 前景/背景互换（相反色），保证选区文字任何情况下可见 */
 const THEMES = {
@@ -112,6 +119,7 @@ export function EmbeddedTerminal() {
   const navigate = useNavigate();
   const services = useServices();
   const serviceName = services.data?.find((r) => r.service.id === serviceId)?.service.name ?? "";
+  const frameRef = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const ptyIdRef = useRef<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -126,6 +134,10 @@ export function EmbeddedTerminal() {
       return true;
     }
   });
+  // 右键菜单：坐标相对终端框；canCopy 记录打开那一刻是否存在选区
+  const [menu, setMenu] = useState<{ x: number; y: number; canCopy: boolean } | null>(null);
+  // 多行粘贴确认：待写入的原始文本 + 行数
+  const [pasteAsk, setPasteAsk] = useState<{ text: string; lines: number } | null>(null);
 
   // ===== 挂载/重挂载：把会话终端接到页面 DOM 上（不新建、不销毁） =====
   useEffect(() => {
@@ -186,17 +198,11 @@ export function EmbeddedTerminal() {
         const resizeSub = term.onResize(({ rows, cols }) => {
           void invoke("pty_resize_cmd", { id, rows, cols }).catch(() => {});
         });
-        const selSub = term.onSelectionChange(() => {
-          // 左键选中即复制（Rust 侧 arboard，绕开 WebView2 剪贴板限制）
-          const sel = term.getSelection();
-          if (sel) void invoke("copy_to_clipboard", { text: sel }).catch(() => {});
-        });
         session.unlisten.push(
           () => offOut(),
           () => offExit(),
           () => dataSub.dispose(),
           () => resizeSub.dispose(),
-          () => selSub.dispose(),
         );
 
         // 自动换行初始状态同步给刚创建的终端
@@ -213,6 +219,21 @@ export function EmbeddedTerminal() {
       if (disposed) return;
       try {
         sess.fit.fit();
+        // 兜底：行区实际渲染高度若仍超出容器（字体/DPI 取整偏差），下一帧回退一行，
+        // 确保底部输入行永远可见。rAF 等一帧是为了读到 resize 后的真实 DOM 高度
+        requestAnimationFrame(() => {
+          if (disposed) return;
+          const host = boxRef.current;
+          const rowsEl = sess.term.element?.querySelector<HTMLElement>(".xterm-rows");
+          if (
+            host &&
+            rowsEl &&
+            sess.term.rows > 2 &&
+            rowsEl.getBoundingClientRect().height > host.clientHeight + 0.5
+          ) {
+            sess.term.resize(sess.term.rows - 1, sess.term.cols);
+          }
+        });
         if (sess.ptyId != null) {
           void invoke("pty_resize_cmd", {
             id: sess.ptyId,
@@ -234,25 +255,6 @@ export function EmbeddedTerminal() {
       ro.disconnect();
     });
 
-    // ===== 右键粘贴（按页面挂载绑定；左右键习惯：左选复制/右键粘贴） =====
-    const pasteClipboard = () => {
-      navigator.clipboard
-        .readText()
-        .then((t) => {
-          if (t && sess.ptyId != null) {
-            void invoke("pty_write_cmd", { id: sess.ptyId, data: t }).catch(() => {});
-            sess.term.scrollToBottom();
-          }
-        })
-        .catch(() => {});
-    };
-    const onCtx = (e: MouseEvent) => {
-      e.preventDefault();
-      pasteClipboard();
-    };
-    box.addEventListener("contextmenu", onCtx);
-    cleanups.push(() => box.removeEventListener("contextmenu", onCtx));
-
     return () => {
       disposed = true;
       cleanups.forEach((f) => f());
@@ -261,6 +263,66 @@ export function EmbeddedTerminal() {
     // themeKey/wrap 不参与此依赖：二者走独立 effect 热应用，避免重建会话
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serviceId]);
+
+  // ===== 右键菜单：选中文本后右键 → 复制/粘贴（旧"左选即复制/右键直粘贴"已移除） =====
+  const openMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const frame = frameRef.current;
+    if (!frame) return;
+    const rect = frame.getBoundingClientRect();
+    setMenu({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+      canCopy: !!sessions.get(serviceId)?.term.hasSelection(),
+    });
+  };
+
+  useEffect(() => {
+    if (!menu) return;
+    const close = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest("[data-term-menu]")) setMenu(null);
+    };
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenu(null);
+    };
+    document.addEventListener("mousedown", close, true);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", close, true);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [menu]);
+
+  const writeToPty = (data: string) => {
+    const sess = sessions.get(serviceId);
+    if (sess?.ptyId != null) {
+      void invoke("pty_write_cmd", { id: sess.ptyId, data }).catch(() => {});
+      sess.term.scrollToBottom();
+    }
+  };
+
+  const doCopy = () => {
+    setMenu(null);
+    const sel = sessions.get(serviceId)?.term.getSelection();
+    if (sel) void invoke("copy_to_clipboard", { text: sel }).catch(() => {});
+    sessions.get(serviceId)?.term.clearSelection();
+  };
+
+  const doPaste = () => {
+    setMenu(null);
+    void invoke<string>("read_clipboard")
+      .then((text) => {
+        if (!text) return;
+        // 行数按去掉尾部换行后的实际行算；多行必须经确认，防误粘误执行
+        const lines = text.replace(/[\r\n]+$/, "").split(/\r\n|\r|\n/).length;
+        if (lines > 1) {
+          setPasteAsk({ text, lines });
+        } else {
+          writeToPty(text.replace(/\r\n|\r|\n/g, "\r"));
+        }
+      })
+      .catch(() => {});
+  };
 
   // ===== 主题切换（热应用到当前会话终端）=====
   useEffect(() => {
@@ -371,15 +433,63 @@ export function EmbeddedTerminal() {
       )}
 
       <div
+        ref={frameRef}
         aria-label="内嵌终端内容"
         className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-surface-3"
         style={{ background: THEMES[themeKey].background }}
+        onContextMenu={openMenu}
       >
         {/* xterm 挂载点：absolute inset-0 保证 FitAddon 拿到的几何精确（零内边距） */}
         <div ref={boxRef} className="absolute inset-0" />
+
+        {menu && (
+          <div
+            data-term-menu
+            role="menu"
+            aria-label="终端操作菜单"
+            className="absolute z-20 min-w-36 overflow-hidden rounded-lg border border-surface-3 bg-surface-2 py-1 shadow-lg"
+            style={{
+              left: Math.max(0, Math.min(menu.x, (frameRef.current?.clientWidth ?? 0) - 156)),
+              top: Math.max(0, Math.min(menu.y, (frameRef.current?.clientHeight ?? 0) - 96)),
+            }}
+          >
+            <button
+              role="menuitem"
+              disabled={!menu.canCopy}
+              onClick={doCopy}
+              className="block w-full px-3 py-2 text-left text-sm text-content hover:bg-surface-3 disabled:cursor-not-allowed disabled:text-muted disabled:hover:bg-transparent"
+            >
+              复制
+            </button>
+            <button
+              role="menuitem"
+              onClick={doPaste}
+              className="block w-full px-3 py-2 text-left text-sm text-content hover:bg-surface-3"
+            >
+              粘贴
+            </button>
+          </div>
+        )}
       </div>
+
+      <ConfirmDialog
+        open={pasteAsk != null}
+        title="粘贴多行内容"
+        message={`即将向终端粘贴 ${pasteAsk?.lines ?? 0} 行内容，多行内容会逐行发送并可能被逐行执行，确认继续？`}
+        actions={[
+          { key: "cancel", label: "取消" },
+          { key: "ok", label: "确认粘贴", danger: true },
+        ]}
+        onAction={(key) => {
+          if (key === "ok" && pasteAsk) {
+            writeToPty(pasteAsk.text.replace(/\r\n|\r|\n/g, "\r"));
+          }
+          setPasteAsk(null);
+        }}
+      />
+
       <p className="text-xs text-muted">
-        左键选中即复制，右键粘贴（Ctrl+Shift+C/V 同样可用）· 会话以服务配置的环境变量与工作目录运行 ·
+        选中文本后右键选择复制/粘贴，粘贴多行内容前会提示确认 · 会话以服务配置的环境变量与工作目录运行 ·
         返回页面会话保持，仅「关闭会话」终止并重置。
       </p>
     </div>
