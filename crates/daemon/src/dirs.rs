@@ -125,6 +125,10 @@ impl DataDirs {
     pub fn service_log(&self, id: &str) -> PathBuf {
         self.service_logs.join(format!("{id}.log"))
     }
+    /// v2.6.0：FTP 服务日志
+    pub fn ftp_log(&self) -> PathBuf {
+        self.logs.join("ftp.log")
+    }
 }
 
 /// 原子写入：写临时文件后重命名覆盖（开发文档 §5.2）

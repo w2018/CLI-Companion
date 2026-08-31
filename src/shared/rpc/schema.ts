@@ -184,6 +184,9 @@ export const FtpStatusSchema = z.object({
   sessions: z.number(),
   bytes_served: z.number().optional().nullable(),
   bytes_received: z.number().optional().nullable(),
+  daemon_cpu: z.number().optional().nullable(),
+  daemon_mem_bytes: z.number().optional().nullable(),
+  daemon_mem_percent: z.number().optional().nullable(),
   local_ip: z.string().nullable().optional(),
   last_error: z.string().nullable().optional(),
 });

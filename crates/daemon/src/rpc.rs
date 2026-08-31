@@ -585,6 +585,7 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
             let app = state.app().await;
             let ftp = app.ftp;
             let rt = crate::ftp::runtime_snapshot();
+            let (daemon_cpu, daemon_mem, daemon_mem_pct) = crate::state::daemon_metrics_snapshot();
             Ok(json!({
                 "enabled": ftp.enabled,
                 "running": rt.running,
@@ -598,7 +599,35 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
                 "bytes_received": rt.bytes_received,
                 "local_ip": rt.local_ip,
                 "last_error": rt.last_error,
+                "daemon_cpu": daemon_cpu,
+                "daemon_mem_bytes": daemon_mem,
+                "daemon_mem_percent": daemon_mem_pct,
             }))
+        }
+
+        M::FtpLogs => {
+            let tail = params
+                .get("tail")
+                .and_then(Value::as_u64)
+                .unwrap_or(200)
+                .min(5000) as usize;
+            let path = state.dirs.ftp_log();
+            let content = std::fs::read_to_string(&path).unwrap_or_default();
+            let lines: Vec<&str> = content.lines().collect();
+            let start = lines.len().saturating_sub(tail);
+            Ok(json!({"lines": &lines[start..], "total": lines.len()}))
+        }
+
+        M::FtpLogsClear => {
+            let path = state.dirs.ftp_log();
+            match std::fs::write(&path, "") {
+                Ok(()) => Ok(json!({"ok": true})),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(json!({"ok": true})),
+                Err(e) => Err(RpcError::new(
+                    error::ErrorCode::Internal,
+                    format!("清空 FTP 日志失败: {e}"),
+                )),
+            }
         }
 
         // ===== 事件（真实推送在 handle_connection 中拦截，此分支仅为穷尽性匹配兜底）=====

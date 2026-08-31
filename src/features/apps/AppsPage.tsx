@@ -11,9 +11,11 @@ import {
   type FtpSettings,
   type FtpUser,
 } from "../../shared/rpc/schema";
+import { Activity } from "lucide-react";
 import { describeError } from "../../shared/rpc/errors";
 import { useUiStore } from "../../stores/uiStore";
 import { formatBytes } from "../../shared/utils/format";
+import { percentLevel } from "../../shared/utils/metrics";
 
 const inputCls =
   "h-9 w-full rounded-lg border border-surface-3 bg-surface px-3 text-sm focus:border-accent focus:outline-none";
@@ -213,7 +215,7 @@ function FtpTab({
   listenerRoots,
 }: {
   ftp: FtpSettings;
-  ftpData?: { running: boolean; enabled: boolean; ports?: number[]; passive_port_start: number; passive_port_end: number; listeners: number; users: number; sessions: number; bytes_served?: number | null; bytes_received?: number | null; local_ip?: string | null; last_error?: string | null };
+  ftpData?: { running: boolean; enabled: boolean; ports?: number[]; passive_port_start: number; passive_port_end: number; listeners: number; users: number; sessions: number; bytes_served?: number | null; bytes_received?: number | null; daemon_cpu?: number | null; daemon_mem_bytes?: number | null; daemon_mem_percent?: number | null; local_ip?: string | null; last_error?: string | null };
   ftpError: boolean;
   draft: FtpSettings | null;
   setDraft: (d: FtpSettings | null) => void;
@@ -224,8 +226,17 @@ function FtpTab({
   listenerRoots: { port: number; root: string }[];
 }) {
   const pushToast = useUiStore((s) => s.pushToast);
+  const qc = useQueryClient();
   // 站点折叠状态：已展开的站点索引集合
   const [expandedSites, setExpandedSites] = useState<Set<number>>(new Set());
+  // FTP 日志
+  const [showLogs, setShowLogs] = useState(false);
+  const ftpLogs = useQuery({
+    queryKey: ["ftp-logs"],
+    queryFn: () => rpc<{ lines: string[]; total: number }>("ftp.logs", { tail: 200 }),
+    refetchInterval: showLogs ? 3000 : false,
+    enabled: showLogs,
+  });
 
   const toggleExpand = (i: number) => {
     setExpandedSites((prev) => {
@@ -242,6 +253,10 @@ function FtpTab({
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold">FTP 服务</h2>
           <div className="flex items-center gap-4">
+            {/* 动态传输图标：bytes 增量 > 0 时 pulse 动画 */}
+            {ftpData && ftpData.running && ((ftpData.bytes_served ?? 0) > 0 || (ftpData.bytes_received ?? 0) > 0) && (
+              <Activity size={16} className="animate-pulse text-ok" aria-label="传输中" />
+            )}
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -295,6 +310,22 @@ function FtpTab({
                   <span className="text-muted">↓ 接收 </span>
                   <span className="font-mono text-accent">{formatBytes(ftpData.bytes_received)}</span>
                 </span>
+                {ftpData.daemon_cpu != null && (
+                  <span>
+                    <span className="text-muted">CPU </span>
+                    <span className={`font-mono ${percentLevel(ftpData.daemon_cpu, 60, 85)}`}>
+                      {ftpData.daemon_cpu.toFixed(1)}%
+                    </span>
+                  </span>
+                )}
+                {ftpData.daemon_mem_bytes != null && ftpData.daemon_mem_bytes > 0 && (
+                  <span>
+                    <span className="text-muted">内存 </span>
+                    <span className={`font-mono ${percentLevel(ftpData.daemon_mem_percent ?? 0, 70, 90)}`}>
+                      {formatBytes(ftpData.daemon_mem_bytes)}
+                    </span>
+                  </span>
+                )}
               </p>
             )}
             <p className="text-xs text-muted">
@@ -311,6 +342,44 @@ function FtpTab({
           </div>
         ) : (
           <p className="text-sm text-muted">状态加载中…</p>
+        )}
+      </section>
+
+      {/* ===== FTP 日志（折叠展开）===== */}
+      <section className="rounded-xl border border-surface-3 bg-surface-2">
+        <button
+          className="flex w-full items-center justify-between p-4 text-left text-sm font-semibold"
+          onClick={() => setShowLogs(!showLogs)}
+        >
+          <span>FTP 日志</span>
+          <span className={`text-xs transition-transform ${showLogs ? "rotate-90" : ""}`}>▶</span>
+        </button>
+        {showLogs && (
+          <div className="border-t border-surface-3 p-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs text-muted">
+                最近 {ftpLogs.data?.lines?.length ?? 0} 条 / 共 {ftpLogs.data?.total ?? 0} 条
+              </span>
+              <button
+                className={btnSmall}
+                onClick={async () => {
+                  if (!window.confirm("确定清空 FTP 日志？")) return;
+                  try {
+                    await rpc("ftp.logs.clear");
+                    void qc.invalidateQueries({ queryKey: ["ftp-logs"] });
+                    pushToast("ok", "FTP 日志已清空");
+                  } catch (e) {
+                    pushToast("err", describeError(e as never));
+                  }
+                }}
+              >
+                清空日志
+              </button>
+            </div>
+            <pre className="max-h-64 overflow-y-auto rounded bg-surface p-3 font-mono text-xs text-muted/80">
+              {ftpLogs.data?.lines?.join("\n") || "暂无日志"}
+            </pre>
+          </div>
         )}
       </section>
 

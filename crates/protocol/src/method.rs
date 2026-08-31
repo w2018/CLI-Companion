@@ -82,6 +82,12 @@ pub enum Method {
     /// 内置 FTP 服务运行状态
     #[serde(rename = "ftp.status")]
     FtpStatus,
+    /// FTP 服务日志（读最后 N 行）
+    #[serde(rename = "ftp.logs")]
+    FtpLogs,
+    /// FTP 服务日志清空
+    #[serde(rename = "ftp.logs.clear")]
+    FtpLogsClear,
 }
 
 impl Method {
@@ -117,6 +123,8 @@ impl Method {
             Method::CrashReportList => "crashreport.list",
             Method::CrashReportGet => "crashreport.get",
             Method::FtpStatus => "ftp.status",
+            Method::FtpLogs => "ftp.logs",
+            Method::FtpLogsClear => "ftp.logs.clear",
         }
     }
 }
@@ -158,6 +166,8 @@ mod tests {
             Method::CrashReportList,
             Method::CrashReportGet,
             Method::FtpStatus,
+            Method::FtpLogs,
+            Method::FtpLogsClear,
         ];
         for m in all {
             let s = serde_json::to_value(m).unwrap();

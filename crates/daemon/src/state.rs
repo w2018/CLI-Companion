@@ -8,6 +8,7 @@ use crate::sync::SyncEngine;
 use cli_companion_domain::{ServiceStatus, ServicesConfig};
 use cli_companion_platform::lock::{LockError, SingletonLock};
 use cli_companion_protocol::EventTopic;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -109,6 +110,79 @@ impl AppState {
     }
 }
 
+// ===== daemon 自身进程指标采样（供 FTP 状态卡等使用）=====
+
+/// daemon 自身的 CPU/内存指标（每 2s 采样，供 ftp.status 等读取）
+#[derive(Debug, Default)]
+pub struct DaemonMetrics {
+    /// CPU 使用率百分比（0-100），None = 尚未采样
+    pub cpu_percent: std::sync::Mutex<Option<f32>>,
+    /// 内存工作集字节
+    pub mem_bytes: AtomicU64,
+    /// 内存占系统百分比
+    pub mem_percent: std::sync::Mutex<Option<f32>>,
+}
+
+/// 全局 daemon 指标（OnceLock，bootstrap 初始化一次）
+static DAEMON_METRICS: std::sync::OnceLock<Arc<DaemonMetrics>> = std::sync::OnceLock::new();
+
+/// 读取 daemon 指标快照
+pub fn daemon_metrics_snapshot() -> (Option<f32>, u64, Option<f32>) {
+    let m = DAEMON_METRICS.get().unwrap();
+    let cpu = *m.cpu_percent.lock().unwrap();
+    let mem = m.mem_bytes.load(Ordering::Relaxed);
+    let pct = *m.mem_percent.lock().unwrap();
+    (cpu, mem, pct)
+}
+
+/// 采样 daemon 自身进程指标（2s 间隔，spawn 在 bootstrap 中）
+pub fn spawn_daemon_sampler(metrics: Arc<DaemonMetrics>, shutdown: Arc<tokio::sync::Notify>) {
+    tokio::spawn(async move {
+        use crate::metrics::{compute_mem_percent, compute_tree_cpu_percent, SAMPLE_INTERVAL_MS};
+        use cli_companion_platform::process::snapshot;
+        use cli_companion_platform::sysinfo::total_phys_bytes;
+        use std::time::Instant;
+
+        let pid = std::process::id();
+        let mut prev_cpu: Option<u64> = None;
+        let mut prev_time: Option<Instant> = None;
+        let total_mem = total_phys_bytes();
+        let cores = num_cpus();
+
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_millis(SAMPLE_INTERVAL_MS)) => {}
+                _ = shutdown.notified() => break,
+            }
+            if let Ok(snap) = snapshot(pid) {
+                let now = Instant::now();
+                // CPU
+                if let (Some(prev_t), Some(prev_c)) = (prev_time, prev_cpu) {
+                    let elapsed = now.duration_since(prev_t);
+                    let delta = snap.cpu_time_100ns.saturating_sub(prev_c);
+                    *metrics.cpu_percent.lock().unwrap() =
+                        compute_tree_cpu_percent(delta, elapsed, cores);
+                }
+                prev_cpu = Some(snap.cpu_time_100ns);
+                prev_time = Some(now);
+                // 内存
+                metrics
+                    .mem_bytes
+                    .store(snap.working_set_bytes, Ordering::Relaxed);
+                *metrics.mem_percent.lock().unwrap() =
+                    compute_mem_percent(snap.working_set_bytes, total_mem);
+            }
+        }
+    });
+}
+
+/// 获取逻辑 CPU 核数（Windows 上用 SystemInfo）
+fn num_cpus() -> u64 {
+    std::thread::available_parallelism()
+        .map(|n| n.get() as u64)
+        .unwrap_or(1)
+}
+
 /// 启动引导：日志 → 单例锁 → 加载配置 → autostart → 同步调度 → 管道服务
 pub async fn bootstrap(
     stop_rx: tokio::sync::oneshot::Receiver<()>,
@@ -205,6 +279,11 @@ pub async fn bootstrap(
 
     // 6.6 v2.6.0：内置 FTP 服务端（监督任务随 config.changed 即时启停/换端口）
     crate::ftp::spawn_supervisor(state.clone());
+
+    // 6.7 v2.6.0：daemon 自身 CPU/内存指标采样（供 ftp.status 等读取）
+    let daemon_metrics = Arc::new(DaemonMetrics::default());
+    let _ = DAEMON_METRICS.set(daemon_metrics.clone());
+    spawn_daemon_sampler(daemon_metrics, state.shutdown.clone());
 
     // 7. 管道 RPC 服务 + 关闭等待
     let shutdown = state.shutdown.clone();

@@ -369,6 +369,7 @@ async fn handle_session(
         .local_addr()
         .map(|a| a.ip())
         .unwrap_or(IpAddr::from([127, 0, 0, 1]));
+    let log_path = state.dirs.ftp_log();
     let mut sess = Session {
         stream,
         peer,
@@ -385,6 +386,7 @@ async fn handle_session(
         pending: None,
         rnfr: None,
         rest_offset: 0,
+        log_path,
         _conn_guard: None,
         _auth_guard: None,
     };
@@ -750,6 +752,8 @@ struct Session {
     /// RNFR 暂存（与数据连接模式互不影响）
     rnfr: Option<VPath>,
     rest_offset: u64,
+    /// FTP 日志文件路径
+    log_path: PathBuf,
     _conn_guard: Option<ConnGuard>,
     _auth_guard: Option<AuthGuard>,
 }
@@ -760,6 +764,25 @@ impl Session {
             .write_all(format!("{text}\r\n").as_bytes())
             .await?;
         self.stream.flush().await
+    }
+
+    /// 写入 FTP 日志（每行重新 open append，兼容外部清空；10MB 轮转）
+    fn log_line(&self, tag: &str, msg: &str) {
+        use std::io::Write;
+        const FTP_LOG_ROTATE: u64 = 10 * 1024 * 1024;
+        if let Ok(meta) = std::fs::metadata(&self.log_path) {
+            if meta.len() > FTP_LOG_ROTATE {
+                let old = self.log_path.with_extension("old");
+                let _ = std::fs::remove_file(&old);
+                let _ = std::fs::rename(&self.log_path, &old);
+            }
+        }
+        let ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.log_path)
+            .and_then(|mut f| writeln!(f, "[{ts}] [{tag}] {} [{}]", msg, self.peer.ip()));
     }
 
     async fn run(&mut self) {
@@ -774,6 +797,7 @@ impl Session {
         {
             return;
         }
+        self.log_line("conn", "连接建立");
         loop {
             let line = tokio::select! {
                 r = read_line(&mut self.stream, &mut self.rbuf) => r,
@@ -935,6 +959,10 @@ impl Session {
         };
         if !ok {
             self.auth_fails += 1;
+            self.log_line(
+                "auth",
+                &format!("登录失败 user={} fails={}", username, self.auth_fails),
+            );
             if self.auth_fails >= MAX_AUTH_FAILS {
                 let _ = self.reply("530 Login incorrect.").await;
                 let _ = self.reply("421 Too many failed logins.").await;
@@ -956,6 +984,7 @@ impl Session {
             shared: self.shared.clone(),
         });
         self.shared.sessions.fetch_add(1, Ordering::Relaxed);
+        self.log_line("auth", &format!("登录成功 user={}", username));
         self.reply("230 Login successful.").await.map_err(|_| ())
     }
 
@@ -1367,6 +1396,7 @@ impl Session {
         let ok = data.write_all(body.as_bytes()).await.is_ok() && data.shutdown().await.is_ok();
         if ok {
             self.shared.bytes_served.fetch_add(len, Ordering::Relaxed);
+            self.log_line("data", &format!("LIST 完成 {len} bytes"));
         }
         if ok {
             self.reply("226 Transfer complete.").await.map_err(|_| ())
@@ -1414,6 +1444,7 @@ impl Session {
             self.shared
                 .bytes_served
                 .fetch_add(copied, Ordering::Relaxed);
+            self.log_line("data", &format!("RETR 完成 {copied} bytes"));
             self.reply("226 Transfer complete.").await.map_err(|_| ())
         } else {
             self.reply("451 Transfer aborted.").await.map_err(|_| ())
@@ -1472,6 +1503,7 @@ impl Session {
             self.shared
                 .bytes_received
                 .fetch_add(copied, Ordering::Relaxed);
+            self.log_line("data", &format!("STOR 完成 {copied} bytes"));
         }
         if copied > 0 {
             self.reply("226 Transfer complete.").await.map_err(|_| ())
