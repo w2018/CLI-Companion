@@ -805,7 +805,7 @@ impl Session {
         {
             return;
         }
-        self.log_event("连接", "CONNECT");
+        self.log_event("登录成功", "CONNECT");
         loop {
             let line = tokio::select! {
                 r = read_line(&mut self.stream, &mut self.rbuf) => r,
@@ -1047,10 +1047,12 @@ impl Session {
                     .await
                     .map_err(|_| ())
             }
-            Err(_) => self
-                .reply("550 Create directory failed.")
-                .await
-                .map_err(|_| ()),
+            Err(_) => {
+                self.log_event("创建目录失败", &vp.display());
+                self.reply("550 Create directory failed.")
+                    .await
+                    .map_err(|_| ())
+            }
         }
     }
 
@@ -1102,7 +1104,10 @@ impl Session {
                 self.log_event("删除", &vp.display());
                 self.reply("250 File deleted.").await.map_err(|_| ())
             }
-            Err(_) => self.reply("550 Delete failed.").await.map_err(|_| ()),
+            Err(_) => {
+                self.log_event("删除失败", &vp.display());
+                self.reply("550 Delete failed.").await.map_err(|_| ())
+            }
         }
     }
 
@@ -1148,7 +1153,10 @@ impl Session {
                 self.log_event("重命名", &format!("{} → {}", src_path, dst.display()));
                 self.reply("250 Rename successful.").await.map_err(|_| ())
             }
-            Err(_) => self.reply("550 Rename failed.").await.map_err(|_| ()),
+            Err(_) => {
+                self.log_event("重命名失败", &format!("{} → {}", src_path, dst.display()));
+                self.reply("550 Rename failed.").await.map_err(|_| ())
+            }
         }
     }
 
@@ -1338,6 +1346,7 @@ impl Session {
         } else {
             entries.iter().map(list_line).collect()
         };
+        self.log_event("列表", &vp.display());
         self.send_lines(lines).await
     }
 
@@ -1360,6 +1369,7 @@ impl Session {
             .iter()
             .map(|e| format!("{} {}", mlsd_facts(e), e.name))
             .collect();
+        self.log_event("列表", &vp.display());
         self.send_lines(lines).await
     }
 
@@ -1411,7 +1421,6 @@ impl Session {
         let ok = data.write_all(body.as_bytes()).await.is_ok() && data.shutdown().await.is_ok();
         if ok {
             self.shared.bytes_served.fetch_add(len, Ordering::Relaxed);
-            self.log_event("列表", &format!("{len} bytes"));
         }
         if ok {
             self.reply("226 Transfer complete.").await.map_err(|_| ())
@@ -1459,9 +1468,10 @@ impl Session {
             self.shared
                 .bytes_served
                 .fetch_add(copied, Ordering::Relaxed);
-            self.log_event("下载", &format!("{copied} bytes"));
+            self.log_event("下载", &vp.display());
             self.reply("226 Transfer complete.").await.map_err(|_| ())
         } else {
+            self.log_event("下载失败", &vp.display());
             self.reply("451 Transfer aborted.").await.map_err(|_| ())
         }
     }
@@ -1518,11 +1528,12 @@ impl Session {
             self.shared
                 .bytes_received
                 .fetch_add(copied, Ordering::Relaxed);
-            self.log_event("上传", &format!("{copied} bytes"));
+            self.log_event("上传", &vp.display());
         }
         if copied > 0 {
             self.reply("226 Transfer complete.").await.map_err(|_| ())
         } else {
+            self.log_event("上传失败", &vp.display());
             self.reply("451 Transfer aborted.").await.map_err(|_| ())
         }
     }

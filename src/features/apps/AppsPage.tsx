@@ -44,18 +44,22 @@ const DEFAULT_FTP: FtpSettings = {
   users: [],
 };
 
-/** 日志操作标签颜色映射（与截图一致） */
+/** 日志操作标签颜色映射（成功各有颜色，失败统一红色） */
 const LOG_OP_CLS: Record<string, string> = {
   "登录成功": "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
-  "连接": "bg-surface-3 text-muted",
   "下载": "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
   "上传": "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
   "重命名": "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400",
   "删除": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
   "创建目录": "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400",
-  "切换目录": "bg-surface-3 text-muted",
   "列表": "bg-surface-3 text-muted",
+  "切换目录": "bg-surface-3 text-muted",
   "登录失败": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+  "下载失败": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+  "上传失败": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+  "重命名失败": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+  "删除失败": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+  "创建目录失败": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
 };
 
 const overlayCls =
@@ -245,12 +249,28 @@ function FtpTab({
   const [expandedSites, setExpandedSites] = useState<Set<number>>(new Set());
   // FTP 日志
   const [showLogs, setShowLogs] = useState(false);
+  const [logFilterOp, setLogFilterOp] = useState("");
+  const [logFilterIp, setLogFilterIp] = useState("");
+  const [logFilterUser, setLogFilterUser] = useState("");
   const ftpLogs = useQuery({
     queryKey: ["ftp-logs"],
-    queryFn: () => rpc<{ lines: string[]; total: number }>("ftp.logs", { tail: 200 }),
+    queryFn: () => rpc<{ lines: string[]; total: number }>("ftp.logs", { tail: 500 }),
     refetchInterval: showLogs ? 3000 : false,
     enabled: showLogs,
   });
+  // 解析日志并筛选
+  const parsedLogs = (ftpLogs.data?.lines ?? [])
+    .slice()
+    .reverse()
+    .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+    .filter(Boolean)
+    .filter((e: any) => !logFilterOp || e.op === logFilterOp)
+    .filter((e: any) => !logFilterIp || e.ip === logFilterIp)
+    .filter((e: any) => !logFilterUser || e.user === logFilterUser);
+  // 筛选选项（从日志中提取唯一值）
+  const allOps = [...new Set((ftpLogs.data?.lines ?? []).map((l) => { try { return JSON.parse(l).op; } catch { return null; } }).filter(Boolean))];
+  const allIps = [...new Set((ftpLogs.data?.lines ?? []).map((l) => { try { return JSON.parse(l).ip; } catch { return null; } }).filter(Boolean))];
+  const allUsers = [...new Set((ftpLogs.data?.lines ?? []).map((l) => { try { return JSON.parse(l).user; } catch { return null; } }).filter(Boolean))];
 
   const toggleExpand = (i: number) => {
     setExpandedSites((prev) => {
@@ -359,7 +379,7 @@ function FtpTab({
         )}
       </section>
 
-      {/* ===== FTP 日志（结构化表格）===== */}
+      {/* ===== FTP 日志（结构化表格 + 筛选）===== */}
       <section className="rounded-xl border border-surface-3 bg-surface-2">
         <button
           className="flex w-full items-center justify-between p-4 text-left text-sm font-semibold"
@@ -370,10 +390,21 @@ function FtpTab({
         </button>
         {showLogs && (
           <div className="border-t border-surface-3">
-            <div className="flex items-center justify-between px-4 py-2">
-              <span className="text-xs text-muted">
-                {ftpLogs.data?.total ?? 0} 条记录
-              </span>
+            {/* 筛选栏 */}
+            <div className="flex flex-wrap items-center gap-2 border-b border-surface-3 px-4 py-2">
+              <select className="h-7 rounded border border-surface-3 bg-surface px-2 text-xs" value={logFilterOp} onChange={(e) => setLogFilterOp(e.target.value)}>
+                <option value="">全部操作</option>
+                {allOps.map((op) => <option key={op} value={op}>{op}</option>)}
+              </select>
+              <select className="h-7 rounded border border-surface-3 bg-surface px-2 text-xs" value={logFilterIp} onChange={(e) => setLogFilterIp(e.target.value)}>
+                <option value="">全部 IP</option>
+                {allIps.map((ip) => <option key={ip} value={ip}>{ip}</option>)}
+              </select>
+              <select className="h-7 rounded border border-surface-3 bg-surface px-2 text-xs" value={logFilterUser} onChange={(e) => setLogFilterUser(e.target.value)}>
+                <option value="">全部用户</option>
+                {allUsers.map((u) => <option key={u} value={u}>{u}</option>)}
+              </select>
+              <span className="ml-auto text-xs text-muted">{parsedLogs.length} 条</span>
               <button
                 className={btnSmall}
                 onClick={async () => {
@@ -387,50 +418,51 @@ function FtpTab({
                   }
                 }}
               >
-                清空日志
+                清空
               </button>
             </div>
-            {(!ftpLogs.data?.lines || ftpLogs.data.lines.length === 0) ? (
-              <p className="px-4 pb-4 text-xs text-muted">暂无日志</p>
+            {/* 表格（固定 10 行高度 + 滚动） */}
+            {parsedLogs.length === 0 ? (
+              <p className="px-4 py-6 text-center text-xs text-muted">暂无日志</p>
             ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-t border-surface-3 text-left text-xs text-muted">
-                    <th className="px-4 py-2 font-medium">时间</th>
-                    <th className="px-4 py-2 font-medium">IP</th>
-                    <th className="px-4 py-2 font-medium">用户</th>
-                    <th className="px-4 py-2 font-medium">操作</th>
-                    <th className="px-4 py-2 font-medium">详情</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {ftpLogs.data!.lines.slice().reverse().map((line, i) => {
-                    try {
-                      const entry = JSON.parse(line);
+              <div className="max-h-[320px] overflow-auto">
+                <table className="w-full table-auto text-sm">
+                  <colgroup>
+                    <col className="w-[160px]" />
+                    <col className="w-[130px]" />
+                    <col className="w-[80px]" />
+                    <col className="w-[100px]" />
+                    <col />
+                  </colgroup>
+                  <thead className="sticky top-0 bg-surface-2">
+                    <tr className="border-b border-surface-3 text-left text-xs text-muted">
+                      <th className="px-3 py-2 font-medium">时间</th>
+                      <th className="px-3 py-2 font-medium">IP</th>
+                      <th className="px-3 py-2 font-medium">用户</th>
+                      <th className="px-3 py-2 font-medium">操作</th>
+                      <th className="px-3 py-2 font-medium">详情</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {parsedLogs.map((entry: any, i: number) => {
                       const opCls = LOG_OP_CLS[entry.op] ?? "bg-surface-3 text-muted";
                       return (
-                        <tr key={i} className="border-t border-surface-3/50 last:border-0">
-                          <td className="whitespace-nowrap px-4 py-2 font-mono text-xs text-muted">{entry.ts}</td>
-                          <td className="whitespace-nowrap px-4 py-2 font-mono text-xs">{entry.ip}</td>
-                          <td className="whitespace-nowrap px-4 py-2 font-mono text-xs">{entry.user}</td>
-                          <td className="px-4 py-2">
+                        <tr key={i} className="border-b border-surface-3/50 last:border-0 hover:bg-surface-3/30">
+                          <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs text-muted">{entry.ts}</td>
+                          <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{entry.ip}</td>
+                          <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{entry.user}</td>
+                          <td className="px-3 py-1.5">
                             <span className={`inline-block rounded px-2 py-0.5 text-xs font-medium ${opCls}`}>
                               {entry.op}
                             </span>
                           </td>
-                          <td className="max-w-60 truncate px-4 py-2 font-mono text-xs text-muted">{entry.detail}</td>
+                          <td className="max-w-xs truncate px-3 py-1.5 font-mono text-xs text-muted" title={entry.detail}>{entry.detail}</td>
                         </tr>
                       );
-                    } catch {
-                      return (
-                        <tr key={i} className="border-t border-surface-3/50 last:border-0">
-                          <td colSpan={5} className="px-4 py-2 font-mono text-xs text-muted">{line}</td>
-                        </tr>
-                      );
-                    }
-                  })}
-                </tbody>
-              </table>
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
         )}
