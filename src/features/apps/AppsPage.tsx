@@ -44,6 +44,20 @@ const DEFAULT_FTP: FtpSettings = {
   users: [],
 };
 
+/** 日志操作标签颜色映射（与截图一致） */
+const LOG_OP_CLS: Record<string, string> = {
+  "登录成功": "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
+  "连接": "bg-surface-3 text-muted",
+  "下载": "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+  "上传": "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
+  "重命名": "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400",
+  "删除": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+  "创建目录": "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400",
+  "切换目录": "bg-surface-3 text-muted",
+  "列表": "bg-surface-3 text-muted",
+  "登录失败": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+};
+
 const overlayCls =
   "fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4";
 const dialogCls =
@@ -345,20 +359,20 @@ function FtpTab({
         )}
       </section>
 
-      {/* ===== FTP 日志（折叠展开）===== */}
+      {/* ===== FTP 日志（结构化表格）===== */}
       <section className="rounded-xl border border-surface-3 bg-surface-2">
         <button
           className="flex w-full items-center justify-between p-4 text-left text-sm font-semibold"
           onClick={() => setShowLogs(!showLogs)}
         >
-          <span>FTP 日志</span>
+          <span>连接日志</span>
           <span className={`text-xs transition-transform ${showLogs ? "rotate-90" : ""}`}>▶</span>
         </button>
         {showLogs && (
-          <div className="border-t border-surface-3 p-4">
-            <div className="flex items-center justify-between mb-2">
+          <div className="border-t border-surface-3">
+            <div className="flex items-center justify-between px-4 py-2">
               <span className="text-xs text-muted">
-                最近 {ftpLogs.data?.lines?.length ?? 0} 条 / 共 {ftpLogs.data?.total ?? 0} 条
+                {ftpLogs.data?.total ?? 0} 条记录
               </span>
               <button
                 className={btnSmall}
@@ -376,9 +390,48 @@ function FtpTab({
                 清空日志
               </button>
             </div>
-            <pre className="max-h-64 overflow-y-auto rounded bg-surface p-3 font-mono text-xs text-muted/80">
-              {ftpLogs.data?.lines?.join("\n") || "暂无日志"}
-            </pre>
+            {(!ftpLogs.data?.lines || ftpLogs.data.lines.length === 0) ? (
+              <p className="px-4 pb-4 text-xs text-muted">暂无日志</p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-t border-surface-3 text-left text-xs text-muted">
+                    <th className="px-4 py-2 font-medium">时间</th>
+                    <th className="px-4 py-2 font-medium">IP</th>
+                    <th className="px-4 py-2 font-medium">用户</th>
+                    <th className="px-4 py-2 font-medium">操作</th>
+                    <th className="px-4 py-2 font-medium">详情</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ftpLogs.data!.lines.slice().reverse().map((line, i) => {
+                    try {
+                      const entry = JSON.parse(line);
+                      const opCls = LOG_OP_CLS[entry.op] ?? "bg-surface-3 text-muted";
+                      return (
+                        <tr key={i} className="border-t border-surface-3/50 last:border-0">
+                          <td className="whitespace-nowrap px-4 py-2 font-mono text-xs text-muted">{entry.ts}</td>
+                          <td className="whitespace-nowrap px-4 py-2 font-mono text-xs">{entry.ip}</td>
+                          <td className="whitespace-nowrap px-4 py-2 font-mono text-xs">{entry.user}</td>
+                          <td className="px-4 py-2">
+                            <span className={`inline-block rounded px-2 py-0.5 text-xs font-medium ${opCls}`}>
+                              {entry.op}
+                            </span>
+                          </td>
+                          <td className="max-w-60 truncate px-4 py-2 font-mono text-xs text-muted">{entry.detail}</td>
+                        </tr>
+                      );
+                    } catch {
+                      return (
+                        <tr key={i} className="border-t border-surface-3/50 last:border-0">
+                          <td colSpan={5} className="px-4 py-2 font-mono text-xs text-muted">{line}</td>
+                        </tr>
+                      );
+                    }
+                  })}
+                </tbody>
+              </table>
+            )}
           </div>
         )}
       </section>
@@ -440,6 +493,7 @@ function FtpTab({
                       className={btnSmall}
                       onClick={(e) => {
                         e.stopPropagation();
+                        if (!window.confirm(`确定删除站点「${l.name || "未命名"}」（端口 ${l.port}）？`)) return;
                         setDraft({
                           ...draft!,
                           listeners: draft!.listeners.filter((_, j) => j !== i),

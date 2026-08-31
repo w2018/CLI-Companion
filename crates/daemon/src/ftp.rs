@@ -766,8 +766,8 @@ impl Session {
         self.stream.flush().await
     }
 
-    /// 写入 FTP 日志（每行重新 open append，兼容外部清空；10MB 轮转）
-    fn log_line(&self, tag: &str, msg: &str) {
+    /// 写入 FTP 结构化日志（JSON 每行一条，10MB 轮转）
+    fn log_event(&self, op: &str, detail: &str) {
         use std::io::Write;
         const FTP_LOG_ROTATE: u64 = 10 * 1024 * 1024;
         if let Ok(meta) = std::fs::metadata(&self.log_path) {
@@ -777,12 +777,20 @@ impl Session {
                 let _ = std::fs::rename(&self.log_path, &old);
             }
         }
-        let ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
+        let ts = chrono::Local::now().format("%Y/%m/%d %H:%M:%S").to_string();
+        let user = self.user.as_ref().map(|u| u.name.as_str()).unwrap_or("-");
+        let entry = serde_json::json!({
+            "ts": ts,
+            "ip": self.peer.ip().to_string(),
+            "user": user,
+            "op": op,
+            "detail": detail,
+        });
         let _ = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.log_path)
-            .and_then(|mut f| writeln!(f, "[{ts}] [{tag}] {} [{}]", msg, self.peer.ip()));
+            .and_then(|mut f| writeln!(f, "{}", entry));
     }
 
     async fn run(&mut self) {
@@ -797,7 +805,7 @@ impl Session {
         {
             return;
         }
-        self.log_line("conn", "连接建立");
+        self.log_event("连接", "CONNECT");
         loop {
             let line = tokio::select! {
                 r = read_line(&mut self.stream, &mut self.rbuf) => r,
@@ -959,10 +967,7 @@ impl Session {
         };
         if !ok {
             self.auth_fails += 1;
-            self.log_line(
-                "auth",
-                &format!("登录失败 user={} fails={}", username, self.auth_fails),
-            );
+            self.log_event("登录失败", &format!("fails={}", self.auth_fails));
             if self.auth_fails >= MAX_AUTH_FAILS {
                 let _ = self.reply("530 Login incorrect.").await;
                 let _ = self.reply("421 Too many failed logins.").await;
@@ -984,7 +989,7 @@ impl Session {
             shared: self.shared.clone(),
         });
         self.shared.sessions.fetch_add(1, Ordering::Relaxed);
-        self.log_line("auth", &format!("登录成功 user={}", username));
+        self.log_event("登录成功", "CONNECT");
         self.reply("230 Login successful.").await.map_err(|_| ())
     }
 
@@ -1014,7 +1019,8 @@ impl Session {
         };
         match std::fs::metadata(vp.real(self.view())) {
             Ok(m) if m.is_dir() => {
-                self.cur = vp;
+                self.cur = vp.clone();
+                self.log_event("切换目录", &vp.display());
                 self.reply("250 Directory changed.").await.map_err(|_| ())
             }
             _ => self.reply("550 Directory not found.").await.map_err(|_| ()),
@@ -1035,10 +1041,12 @@ impl Session {
             return self.reply("550 目录已存在.").await.map_err(|_| ());
         }
         match std::fs::create_dir(vp.real(self.view())) {
-            Ok(()) => self
-                .reply(&format!("257 \"{}\" created.", vp.display()))
-                .await
-                .map_err(|_| ()),
+            Ok(()) => {
+                self.log_event("创建目录", &vp.display());
+                self.reply(&format!("257 \"{}\" created.", vp.display()))
+                    .await
+                    .map_err(|_| ())
+            }
             Err(_) => self
                 .reply("550 Create directory failed.")
                 .await
@@ -1090,7 +1098,10 @@ impl Session {
             _ => return self.reply("550 File not found.").await.map_err(|_| ()),
         }
         match std::fs::remove_file(&real) {
-            Ok(()) => self.reply("250 File deleted.").await.map_err(|_| ()),
+            Ok(()) => {
+                self.log_event("删除", &vp.display());
+                self.reply("250 File deleted.").await.map_err(|_| ())
+            }
             Err(_) => self.reply("550 Delete failed.").await.map_err(|_| ()),
         }
     }
@@ -1131,8 +1142,12 @@ impl Session {
         if dst.is_root() || dst.at_mount_root() {
             return self.reply("550 目标路径不合法.").await.map_err(|_| ());
         }
+        let src_path = src.display();
         match std::fs::rename(src.real(self.view()), dst.real(self.view())) {
-            Ok(()) => self.reply("250 Rename successful.").await.map_err(|_| ()),
+            Ok(()) => {
+                self.log_event("重命名", &format!("{} → {}", src_path, dst.display()));
+                self.reply("250 Rename successful.").await.map_err(|_| ())
+            }
             Err(_) => self.reply("550 Rename failed.").await.map_err(|_| ()),
         }
     }
@@ -1396,7 +1411,7 @@ impl Session {
         let ok = data.write_all(body.as_bytes()).await.is_ok() && data.shutdown().await.is_ok();
         if ok {
             self.shared.bytes_served.fetch_add(len, Ordering::Relaxed);
-            self.log_line("data", &format!("LIST 完成 {len} bytes"));
+            self.log_event("列表", &format!("{len} bytes"));
         }
         if ok {
             self.reply("226 Transfer complete.").await.map_err(|_| ())
@@ -1444,7 +1459,7 @@ impl Session {
             self.shared
                 .bytes_served
                 .fetch_add(copied, Ordering::Relaxed);
-            self.log_line("data", &format!("RETR 完成 {copied} bytes"));
+            self.log_event("下载", &format!("{copied} bytes"));
             self.reply("226 Transfer complete.").await.map_err(|_| ())
         } else {
             self.reply("451 Transfer aborted.").await.map_err(|_| ())
@@ -1503,7 +1518,7 @@ impl Session {
             self.shared
                 .bytes_received
                 .fetch_add(copied, Ordering::Relaxed);
-            self.log_line("data", &format!("STOR 完成 {copied} bytes"));
+            self.log_event("上传", &format!("{copied} bytes"));
         }
         if copied > 0 {
             self.reply("226 Transfer complete.").await.map_err(|_| ())
