@@ -21,6 +21,7 @@ async fn main() {
     let app = cli_companion_daemon::app_config::AppConfig {
         ftp: FtpSettings {
             enabled: true,
+            autostart: false,
             passive_port_start: 0,
             passive_port_end: 0,
             listeners: vec![FtpListener {
