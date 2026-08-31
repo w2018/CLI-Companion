@@ -1,6 +1,12 @@
 // schema 契约测试：确保 Zod 定义与 daemon 实际响应格式一致
 import { describe, expect, it } from "vitest";
-import { ServiceRowSchema, SyncStatusSchema, AppConfigSchema } from "./schema";
+import {
+  ServiceRowSchema,
+  SyncStatusSchema,
+  AppConfigSchema,
+  FtpSettingsSchema,
+  FtpStatusSchema,
+} from "./schema";
 import { RpcErrorSchema, describeError } from "./errors";
 
 describe("ServiceRowSchema", () => {
@@ -184,5 +190,97 @@ describe("SyncStatusSchema", () => {
       state: { last_run: null, last_error: null },
     };
     expect(SyncStatusSchema.safeParse(st).success).toBe(true);
+  });
+});
+
+describe("FtpSettingsSchema（v2.6.0 应用功能·FTP）", () => {
+  it("解析完整 FTP 配置（多监听器 + 多目录授权 + 细粒度权限）", () => {
+    const ftp = {
+      enabled: true,
+      passive_port_start: 50000,
+      passive_port_end: 50100,
+      listeners: [
+        { name: "文件分发", port: 21, root: "D:\\ftp", enabled: true },
+        { name: "媒体库", port: 2121, root: "D:\\media", enabled: false },
+      ],
+      users: [
+        {
+          username: "alice",
+          allowed_roots: ["D:\\ftp", "D:\\media"],
+          permissions: { list: true, download: true, upload: true, delete: false, rename: false, mkdir: true },
+          enabled: true,
+        },
+        {
+          username: "guest",
+          allowed_roots: [],
+          permissions: { list: true, download: true, upload: false, delete: false, rename: false, mkdir: false },
+          enabled: false,
+        },
+      ],
+    };
+    const parsed = FtpSettingsSchema.parse(ftp);
+    expect(parsed.listeners).toHaveLength(2);
+    expect(parsed.users[0].allowed_roots).toHaveLength(2);
+    expect(parsed.users[0].permissions.upload).toBe(true);
+    expect(parsed.users[1].permissions.upload).toBe(false);
+  });
+
+  it("旧版本 app.json 无 ftp 段时 AppConfig 兼容（optional）", () => {
+    const oldApp = {
+      version: 1,
+      general: { language: "zh-CN", theme: "system", close_to_tray: true },
+      webdav: {
+        enabled: false,
+        url: "",
+        username: "",
+        remote_dir: "cli-companion",
+        sync_interval_minutes: 15,
+        verify_tls: true,
+        sync_config: true,
+        sync_cli_apps: false,
+      },
+    };
+    const parsed = AppConfigSchema.parse(oldApp);
+    expect(parsed.ftp).toBeUndefined();
+    // 新版本带 ftp 段也正常
+    const newApp = {
+      ...oldApp,
+      ftp: {
+        enabled: false,
+        passive_port_start: 50000,
+        passive_port_end: 50100,
+        listeners: [],
+        users: [],
+      },
+    };
+    expect(AppConfigSchema.parse(newApp).ftp?.enabled).toBe(false);
+  });
+
+  it("解析 ftp.status 运行时状态", () => {
+    const running = FtpStatusSchema.parse({
+      enabled: true,
+      running: true,
+      ports: [21, 2121],
+      passive_port_start: 50000,
+      passive_port_end: 50100,
+      listeners: 2,
+      users: 1,
+      sessions: 3,
+      local_ip: "192.168.1.10",
+      last_error: null,
+    });
+    expect(running.ports).toEqual([21, 2121]);
+    expect(running.sessions).toBe(3);
+    // 旧 daemon 无 ports/local_ip 字段也兼容
+    const legacy = FtpStatusSchema.parse({
+      enabled: false,
+      running: false,
+      passive_port_start: 0,
+      passive_port_end: 0,
+      listeners: 0,
+      users: 0,
+      sessions: 0,
+    });
+    expect(legacy.ports).toBeUndefined();
   });
 });

@@ -60,6 +60,10 @@ impl AppState {
 
     /// 保存 app.json
     pub async fn save_app(&self, app: AppConfig) -> Result<(), String> {
+        // v2.6.0：FTP 配置校验（监听器/用户/端口区间）
+        app.ftp
+            .validate()
+            .map_err(|e| format!("FTP 配置无效: {e}"))?;
         save_app(&self.dirs, &app).map_err(|e| e.to_string())?;
         self.config.lock().await.app = app;
         Ok(())
@@ -192,6 +196,9 @@ pub async fn bootstrap(
 
     // 6.5 v2.2.0：本机只读状态页（监督任务随 config.changed 即时启停/换端口）
     crate::status_http::spawn_supervisor(state.clone());
+
+    // 6.6 v2.6.0：内置 FTP 服务端（监督任务随 config.changed 即时启停/换端口）
+    crate::ftp::spawn_supervisor(state.clone());
 
     // 7. 管道 RPC 服务 + 关闭等待
     let shutdown = state.shutdown.clone();

@@ -6,6 +6,7 @@ pub mod backup;
 pub mod crashreport;
 pub mod dirs;
 pub mod events;
+pub mod ftp;
 pub mod health;
 pub mod manager;
 pub mod metrics;

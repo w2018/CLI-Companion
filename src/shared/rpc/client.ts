@@ -33,6 +33,7 @@ export type MethodName =
   | "backup.restore"
   | "crashreport.list"
   | "crashreport.get"
+  | "ftp.status"
   | "event.subscribe";
 
 /** 解析 Rust 侧返回的错误字符串（RpcError 的 JSON 序列化） */

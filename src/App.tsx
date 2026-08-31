@@ -5,6 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   LayoutDashboard,
   ListChecks,
+  AppWindow,
   Settings,
   Info,
   TerminalSquare,
@@ -25,6 +26,7 @@ import { useUiStore } from "./stores/uiStore";
 const NAV = [
   { to: "/", label: "仪表盘", icon: <LayoutDashboard size={18} aria-hidden /> },
   { to: "/services", label: "服务管理", icon: <ListChecks size={18} aria-hidden /> },
+  { to: "/apps", label: "应用功能", icon: <AppWindow size={18} aria-hidden /> },
   { to: "/daemon-log", label: "守护进程日志", icon: <ScrollText size={18} aria-hidden /> },
   { to: "/settings", label: "设置", icon: <Settings size={18} aria-hidden /> },
   { to: "/about", label: "关于", icon: <Info size={18} aria-hidden /> },

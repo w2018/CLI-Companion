@@ -77,6 +77,11 @@ pub enum Method {
     CrashReportList,
     #[serde(rename = "crashreport.get")]
     CrashReportGet,
+
+    // 应用功能（v2.6.0）
+    /// 内置 FTP 服务运行状态
+    #[serde(rename = "ftp.status")]
+    FtpStatus,
 }
 
 impl Method {
@@ -111,6 +116,7 @@ impl Method {
             Method::BackupRestore => "backup.restore",
             Method::CrashReportList => "crashreport.list",
             Method::CrashReportGet => "crashreport.get",
+            Method::FtpStatus => "ftp.status",
         }
     }
 }
@@ -151,6 +157,7 @@ mod tests {
             Method::BackupRestore,
             Method::CrashReportList,
             Method::CrashReportGet,
+            Method::FtpStatus,
         ];
         for m in all {
             let s = serde_json::to_value(m).unwrap();

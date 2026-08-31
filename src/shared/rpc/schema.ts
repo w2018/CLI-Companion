@@ -135,6 +135,57 @@ export type ServiceRow = z.infer<typeof ServiceRowSchema>;
 
 // ===== 应用配置 =====
 
+// v2.6.0：应用功能 · FTP（旧 daemon 无此段，optional 兼容）
+export const FtpPermissionsSchema = z.object({
+  list: z.boolean(),
+  download: z.boolean(),
+  upload: z.boolean(),
+  delete: z.boolean(),
+  rename: z.boolean(),
+  mkdir: z.boolean(),
+});
+export type FtpPermissions = z.infer<typeof FtpPermissionsSchema>;
+
+export const FtpListenerSchema = z.object({
+  name: z.string(),
+  port: z.number(),
+  root: z.string(),
+  enabled: z.boolean(),
+});
+export type FtpListener = z.infer<typeof FtpListenerSchema>;
+
+export const FtpUserSchema = z.object({
+  username: z.string(),
+  allowed_roots: z.array(z.string()),
+  permissions: FtpPermissionsSchema,
+  enabled: z.boolean(),
+});
+export type FtpUser = z.infer<typeof FtpUserSchema>;
+
+export const FtpSettingsSchema = z.object({
+  enabled: z.boolean(),
+  passive_port_start: z.number(),
+  passive_port_end: z.number(),
+  listeners: z.array(FtpListenerSchema),
+  users: z.array(FtpUserSchema),
+});
+export type FtpSettings = z.infer<typeof FtpSettingsSchema>;
+
+/** ftp.status 响应 */
+export const FtpStatusSchema = z.object({
+  enabled: z.boolean(),
+  running: z.boolean(),
+  ports: z.array(z.number()).optional(),
+  passive_port_start: z.number(),
+  passive_port_end: z.number(),
+  listeners: z.number(),
+  users: z.number(),
+  sessions: z.number(),
+  local_ip: z.string().nullable().optional(),
+  last_error: z.string().nullable().optional(),
+});
+export type FtpStatus = z.infer<typeof FtpStatusSchema>;
+
 export const AppConfigSchema = z.object({
   version: z.number(),
   general: z.object({
@@ -158,6 +209,8 @@ export const AppConfigSchema = z.object({
   status_page: z
     .object({ enabled: z.boolean().optional(), port: z.number().optional() })
     .optional(),
+  // v2.6.0：应用功能 · FTP（旧 daemon 无此段）
+  ftp: FtpSettingsSchema.optional(),
 });
 export type AppConfig = z.infer<typeof AppConfigSchema>;
 

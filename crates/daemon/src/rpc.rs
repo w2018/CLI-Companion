@@ -186,7 +186,16 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
                     serde_json::from_value(v.clone()).map_err(|e| {
                         RpcError::new(error::ErrorCode::Validation, format!("app 配置无效: {e}"))
                     })?;
+                // v2.6.0：清理已删除 FTP 用户的孤儿密码（保存前先取用户名列表）
+                let ftp_users: Vec<String> =
+                    app.ftp.users.iter().map(|u| u.username.clone()).collect();
                 state.save_app(app).await.map_err(validation)?;
+                let mut store = state.config.lock().await;
+                if store.secrets.retain_ftp_users(&ftp_users) {
+                    let secrets = store.secrets.clone();
+                    drop(store);
+                    let _ = state.save_secrets(secrets).await;
+                }
             }
             // WebDAV 密码单独提交（DPAPI 加密存 secrets.json，不进 app.json）
             if let Some(pwd) = params.get("webdav_password").and_then(Value::as_str) {
@@ -194,6 +203,33 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
                 store.secrets.set_webdav_password(pwd).map_err(|e| {
                     RpcError::new(error::ErrorCode::Internal, format!("DPAPI 加密失败: {e}"))
                 })?;
+                let secrets = store.secrets.clone();
+                drop(store);
+                state.save_secrets(secrets).await.map_err(internal)?;
+            }
+            // v2.6.0：FTP 用户密码单独提交（{username, password}，DPAPI 加密存 secrets.json）
+            if let Some(v) = params.get("ftp_user_password") {
+                let username = v
+                    .get("username")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| RpcError::new(error::ErrorCode::Validation, "缺少 username"))?;
+                let password = v
+                    .get("password")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| RpcError::new(error::ErrorCode::Validation, "缺少 password"))?;
+                if password.is_empty() {
+                    return Err(RpcError::new(
+                        error::ErrorCode::Validation,
+                        "FTP 密码不能为空",
+                    ));
+                }
+                let mut store = state.config.lock().await;
+                store
+                    .secrets
+                    .set_ftp_password(username, password)
+                    .map_err(|e| {
+                        RpcError::new(error::ErrorCode::Internal, format!("DPAPI 加密失败: {e}"))
+                    })?;
                 let secrets = store.secrets.clone();
                 drop(store);
                 state.save_secrets(secrets).await.map_err(internal)?;
@@ -232,7 +268,15 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
             let count = cfg.services.len();
             state.save_services(cfg).await.map_err(validation)?;
             if let Some(app) = app {
+                let ftp_users: Vec<String> =
+                    app.ftp.users.iter().map(|u| u.username.clone()).collect();
                 state.save_app(app).await.map_err(validation)?;
+                let mut store = state.config.lock().await;
+                if store.secrets.retain_ftp_users(&ftp_users) {
+                    let secrets = store.secrets.clone();
+                    drop(store);
+                    let _ = state.save_secrets(secrets).await;
+                }
             }
             state.emit(
                 event::EventTopic::ConfigChanged,
@@ -535,6 +579,25 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
             error::ErrorCode::Validation,
             "V1 未启用 WebDAV LOCK，无需解锁",
         )),
+
+        // ===== 应用功能（v2.6.0）=====
+        M::FtpStatus => {
+            let app = state.app().await;
+            let ftp = app.ftp;
+            let rt = crate::ftp::runtime_snapshot();
+            Ok(json!({
+                "enabled": ftp.enabled,
+                "running": rt.running,
+                "ports": rt.ports,
+                "passive_port_start": ftp.passive_port_start,
+                "passive_port_end": ftp.passive_port_end,
+                "listeners": ftp.listeners.len(),
+                "users": ftp.users.iter().filter(|u| u.enabled).count(),
+                "sessions": rt.sessions,
+                "local_ip": rt.local_ip,
+                "last_error": rt.last_error,
+            }))
+        }
 
         // ===== 事件（真实推送在 handle_connection 中拦截，此分支仅为穷尽性匹配兜底）=====
         M::EventSubscribe => Ok(json!({"mode": "stream"})),
