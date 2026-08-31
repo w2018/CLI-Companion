@@ -12,6 +12,7 @@ import {
   type FtpUser,
 } from "../../shared/rpc/schema";
 import { Activity } from "lucide-react";
+import { ConfirmDialog } from "../../shared/components/ConfirmDialog";
 import { describeError } from "../../shared/rpc/errors";
 import { useUiStore } from "../../stores/uiStore";
 import { formatBytes } from "../../shared/utils/format";
@@ -245,6 +246,8 @@ function FtpTab({
 }) {
   const pushToast = useUiStore((s) => s.pushToast);
   const qc = useQueryClient();
+  // 确认弹窗
+  const [confirmDlg, setConfirmDlg] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
   // 站点折叠状态：已展开的站点索引集合
   const [expandedSites, setExpandedSites] = useState<Set<number>>(new Set());
   // FTP 日志
@@ -407,15 +410,20 @@ function FtpTab({
               <span className="ml-auto text-xs text-muted">{parsedLogs.length} 条</span>
               <button
                 className={btnSmall}
-                onClick={async () => {
-                  if (!window.confirm("确定清空 FTP 日志？")) return;
-                  try {
-                    await rpc("ftp.logs.clear");
-                    void qc.invalidateQueries({ queryKey: ["ftp-logs"] });
-                    pushToast("ok", "FTP 日志已清空");
-                  } catch (e) {
-                    pushToast("err", describeError(e as never));
-                  }
+                onClick={() => {
+                  setConfirmDlg({
+                    title: "清空 FTP 日志",
+                    message: "确定清空所有 FTP 日志？此操作不可撤销。",
+                    onConfirm: async () => {
+                      try {
+                        await rpc("ftp.logs.clear");
+                        void qc.invalidateQueries({ queryKey: ["ftp-logs"] });
+                        pushToast("ok", "FTP 日志已清空");
+                      } catch (e) {
+                        pushToast("err", describeError(e as never));
+                      }
+                    },
+                  });
                 }}
               >
                 清空
@@ -525,16 +533,20 @@ function FtpTab({
                       className={btnSmall}
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (!window.confirm(`确定删除站点「${l.name || "未命名"}」（端口 ${l.port}）？`)) return;
-                        setDraft({
-                          ...draft!,
-                          listeners: draft!.listeners.filter((_, j) => j !== i),
-                        });
-                        setExpandedSites((prev) => {
-                          const next = new Set(prev);
-                          next.delete(i);
-                          // 后续索引前移，调整
-                          return new Set([...next].map((n) => (n > i ? n - 1 : n)));
+                        setConfirmDlg({
+                          title: "删除站点",
+                          message: `确定删除站点「${l.name || "未命名"}」（端口 ${l.port}）？`,
+                          onConfirm: () => {
+                            setDraft({
+                              ...draft!,
+                              listeners: draft!.listeners.filter((_, j) => j !== i),
+                            });
+                            setExpandedSites((prev) => {
+                              const next = new Set(prev);
+                              next.delete(i);
+                              return new Set([...next].map((n) => (n > i ? n - 1 : n)));
+                            });
+                          },
                         });
                       }}
                     >
@@ -736,12 +748,17 @@ function FtpTab({
                         )
                       }
                       onDelete={() => {
-                        if (!window.confirm(`确定删除用户 ${u.username}？`)) return;
-                        void saveUsers(
-                          ftp.users.filter((x) => x.username !== u.username),
-                          undefined,
-                          `用户 ${u.username} 已删除`,
-                        );
+                        setConfirmDlg({
+                          title: "删除用户",
+                          message: `确定删除用户 ${u.username}？此操作不可撤销。`,
+                          onConfirm: () => {
+                            void saveUsers(
+                              ftp.users.filter((x) => x.username !== u.username),
+                              undefined,
+                              `用户 ${u.username} 已删除`,
+                            );
+                          },
+                        });
                       }}
                     />
                   </td>
@@ -751,6 +768,21 @@ function FtpTab({
           </table>
         )}
       </section>
+
+      {/* 确认弹窗 */}
+      <ConfirmDialog
+        open={confirmDlg !== null}
+        title={confirmDlg?.title ?? ""}
+        message={confirmDlg?.message ?? ""}
+        actions={[
+          { key: "cancel", label: "取消" },
+          { key: "confirm", label: "确定删除", danger: true },
+        ]}
+        onAction={(key) => {
+          if (key === "confirm") confirmDlg?.onConfirm();
+          setConfirmDlg(null);
+        }}
+      />
     </>
   );
 }
