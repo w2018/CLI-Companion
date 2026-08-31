@@ -164,6 +164,7 @@ export type FtpUser = z.infer<typeof FtpUserSchema>;
 
 export const FtpSettingsSchema = z.object({
   enabled: z.boolean(),
+  autostart: z.boolean().optional().nullable(),
   passive_port_start: z.number(),
   passive_port_end: z.number(),
   listeners: z.array(FtpListenerSchema),
@@ -181,6 +182,8 @@ export const FtpStatusSchema = z.object({
   listeners: z.number(),
   users: z.number(),
   sessions: z.number(),
+  bytes_served: z.number().optional().nullable(),
+  bytes_received: z.number().optional().nullable(),
   local_ip: z.string().nullable().optional(),
   last_error: z.string().nullable().optional(),
 });

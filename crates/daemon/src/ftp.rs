@@ -15,7 +15,7 @@ use crate::state::AppState;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
@@ -36,13 +36,17 @@ const MAX_AUTH_FAILS: u32 = 3;
 
 // ===== 共享运行时状态（RPC ftp.status 读取） =====
 
-/// 单个服务端实例的会话计数（每次启停更换实例）
+/// 单个服务端实例的共享计数（每次启停更换实例）
 #[derive(Default)]
 pub struct FtpServerShared {
     /// 已通过认证的会话数
     pub sessions: AtomicUsize,
     /// 控制连接数（含未登录）
     pub connections: AtomicUsize,
+    /// 累计发送字节数（RETR/LIST/NLST/MLSD 等数据连接写出）
+    pub bytes_served: AtomicU64,
+    /// 累计接收字节数（STOR/APPE 等数据连接读入）
+    pub bytes_received: AtomicU64,
 }
 
 /// FTP 运行时快照（监督任务写入，RPC 读取）
@@ -75,22 +79,30 @@ pub struct FtpRuntimeSnapshot {
     pub starts: usize,
     pub ports: Vec<u16>,
     pub sessions: usize,
+    pub bytes_served: u64,
+    pub bytes_received: u64,
     pub last_error: Option<String>,
     pub local_ip: Option<String>,
 }
 
 pub fn runtime_snapshot() -> FtpRuntimeSnapshot {
     let rt = runtime();
+    let shared = rt.server.lock().unwrap();
     FtpRuntimeSnapshot {
         running: rt.running.load(Ordering::Relaxed),
         starts: rt.starts.load(Ordering::Relaxed),
         ports: rt.ports.lock().unwrap().clone(),
-        sessions: rt
-            .server
-            .lock()
-            .unwrap()
+        sessions: shared
             .as_ref()
             .map(|s| s.sessions.load(Ordering::Relaxed))
+            .unwrap_or(0),
+        bytes_served: shared
+            .as_ref()
+            .map(|s| s.bytes_served.load(Ordering::Relaxed))
+            .unwrap_or(0),
+        bytes_received: shared
+            .as_ref()
+            .map(|s| s.bytes_received.load(Ordering::Relaxed))
             .unwrap_or(0),
         last_error: rt.last_error.lock().unwrap().clone(),
         local_ip: rt.local_ip.lock().unwrap().clone(),
@@ -1351,7 +1363,11 @@ impl Session {
         if !body.is_empty() {
             body.push_str("\r\n");
         }
+        let len = body.len() as u64;
         let ok = data.write_all(body.as_bytes()).await.is_ok() && data.shutdown().await.is_ok();
+        if ok {
+            self.shared.bytes_served.fetch_add(len, Ordering::Relaxed);
+        }
         if ok {
             self.reply("226 Transfer complete.").await.map_err(|_| ())
         } else {
@@ -1392,9 +1408,12 @@ impl Session {
         if self.reply("150 Opening data connection.").await.is_err() {
             return Err(());
         }
-        let ok =
-            tokio::io::copy(&mut file, &mut data).await.is_ok() && data.shutdown().await.is_ok();
+        let copied = tokio::io::copy(&mut file, &mut data).await.unwrap_or(0);
+        let ok = data.shutdown().await.is_ok();
         if ok {
+            self.shared
+                .bytes_served
+                .fetch_add(copied, Ordering::Relaxed);
             self.reply("226 Transfer complete.").await.map_err(|_| ())
         } else {
             self.reply("451 Transfer aborted.").await.map_err(|_| ())
@@ -1447,9 +1466,14 @@ impl Session {
         if self.reply("150 Ready to receive data.").await.is_err() {
             return Err(());
         }
-        let ok = tokio::io::copy(&mut data, &mut file).await.is_ok();
+        let copied = tokio::io::copy(&mut data, &mut file).await.unwrap_or(0);
         let _ = file.sync_all().await;
-        if ok {
+        if copied > 0 {
+            self.shared
+                .bytes_received
+                .fetch_add(copied, Ordering::Relaxed);
+        }
+        if copied > 0 {
             self.reply("226 Transfer complete.").await.map_err(|_| ())
         } else {
             self.reply("451 Transfer aborted.").await.map_err(|_| ())

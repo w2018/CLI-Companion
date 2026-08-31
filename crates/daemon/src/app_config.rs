@@ -53,6 +53,9 @@ impl Default for StatusPageSettings {
 pub struct FtpSettings {
     /// 总开关（关闭时全部监听器下线）
     pub enabled: bool,
+    /// 开机自启：daemon 启动时若 autostart=true 则自动运行 FTP；
+    /// autostart=false 时 daemon 启动会强制 enabled=false（用户需手动启用）
+    pub autostart: bool,
     /// 被动模式数据端口区间（含端点，全局共享）；0-0 = 系统分配临时端口（测试用）
     pub passive_port_start: u16,
     pub passive_port_end: u16,
@@ -66,6 +69,7 @@ impl Default for FtpSettings {
     fn default() -> Self {
         Self {
             enabled: false,
+            autostart: false,
             passive_port_start: 50_000,
             passive_port_end: 50_100,
             listeners: Vec::new(),

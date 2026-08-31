@@ -161,10 +161,16 @@ pub async fn bootstrap(
 
     // 3. 加载配置（损坏时备份为 .corrupt 并使用默认配置）
     let services = load_services_with_recovery(&dirs);
-    let app = load_app(&dirs);
+    let mut app = load_app(&dirs);
     let secrets = load_secrets(&dirs);
     if let Err(e) = services.validate() {
         tracing::warn!("services.json 校验失败（仍已加载）: {e}");
+    }
+    // v2.6.0：FTP 开机自启逻辑——未勾选自启时，daemon 启动强制关闭 FTP
+    // 与受管服务 autostart 行为一致：autostart=false → enabled 被重置为 false
+    if !app.ftp.autostart && app.ftp.enabled {
+        tracing::info!("FTP 未勾选开机自启，daemon 启动时已停用 FTP（用户可手动启用）");
+        app.ftp.enabled = false;
     }
 
     // 4. 构建状态

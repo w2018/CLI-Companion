@@ -1,4 +1,4 @@
-// 应用功能页（v2.6.0）：承载 daemon 内置工具型功能（FTP 服务端等），后续新功能统一放此页
+// 应用功能页（v2.6.0）：顶部标签栏切换不同工具（FTP 服务端等），后续新功能新增标签即可
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 // eslint-disable-next-line import/order
@@ -13,6 +13,7 @@ import {
 } from "../../shared/rpc/schema";
 import { describeError } from "../../shared/rpc/errors";
 import { useUiStore } from "../../stores/uiStore";
+import { formatBytes } from "../../shared/utils/format";
 
 const inputCls =
   "h-9 w-full rounded-lg border border-surface-3 bg-surface px-3 text-sm focus:border-accent focus:outline-none";
@@ -23,7 +24,6 @@ const btnSecondary =
 const btnSmall = "min-h-8 rounded-lg border border-surface-3 px-3 text-xs hover:bg-surface-3";
 const checkCls = "size-4 accent-[rgb(var(--accent))]";
 
-/** 权限项（与 Rust FtpPermissions 字段一一对应） */
 const PERMISSION_ITEMS: { key: keyof FtpPermissions; label: string }[] = [
   { key: "list", label: "浏览/列目录" },
   { key: "download", label: "下载" },
@@ -35,6 +35,7 @@ const PERMISSION_ITEMS: { key: keyof FtpPermissions; label: string }[] = [
 
 const DEFAULT_FTP: FtpSettings = {
   enabled: false,
+  autostart: false,
   passive_port_start: 50000,
   passive_port_end: 50100,
   listeners: [],
@@ -46,9 +47,16 @@ const overlayCls =
 const dialogCls =
   "w-full max-w-lg space-y-4 rounded-xl border border-surface-3 bg-surface-2 p-5 shadow-xl";
 
+type AppTab = "ftp" | "more";
+const TABS: { key: AppTab; label: string; disabled?: boolean }[] = [
+  { key: "ftp", label: "FTP 服务" },
+  { key: "more", label: "更多工具（规划中）", disabled: true },
+];
+
 export function AppsPage() {
   const qc = useQueryClient();
   const pushToast = useUiStore((s) => s.pushToast);
+  const [activeTab, setActiveTab] = useState<AppTab>("ftp");
 
   const cfg = useQuery({
     queryKey: ["config"],
@@ -60,13 +68,11 @@ export function AppsPage() {
     refetchInterval: 5000,
   });
 
-  // 站点设置的本地草稿（监听器 + 被动端口区间），独立保存
   const [draft, setDraft] = useState<FtpSettings | null>(null);
   useEffect(() => {
     setDraft(cfg.data?.app.ftp ?? null);
   }, [cfg.data]);
 
-  // hooks 全部声明后才能提前返回（React #310 教训）
   if (cfg.isError) {
     return (
       <div className="mx-auto max-w-3xl pt-10">
@@ -86,7 +92,6 @@ export function AppsPage() {
   const app = cfg.data.app;
   const ftp = app.ftp ?? DEFAULT_FTP;
 
-  /** 保存 FTP 配置段（extra 可携带 ftp_user_password 等单独参数） */
   const saveFtp = async (next: FtpSettings, extra?: Record<string, unknown>, okMsg?: string) => {
     try {
       await rpc("config.update", { app: { ...app, ftp: next }, ...extra });
@@ -98,19 +103,39 @@ export function AppsPage() {
     }
   };
 
-  // ===== 状态卡操作：启用开关立即生效 =====
   const toggleEnabled = async (v: boolean) => {
     await saveFtp({ ...ftp, enabled: v }, undefined, v ? "FTP 服务已启用" : "FTP 服务已停用");
   };
 
-  // ===== 站点草稿保存 =====
-  const saveDraft = async () => {
-    if (!draft) return;
-    await saveFtp({ ...ftp, enabled: draft.enabled, passive_port_start: draft.passive_port_start, passive_port_end: draft.passive_port_end, listeners: draft.listeners }, undefined, "FTP 站点设置已保存");
+  const toggleAutostart = async (v: boolean) => {
+    await saveFtp(
+      { ...ftp, autostart: v },
+      undefined,
+      v ? "已设置：daemon 启动时自动运行 FTP" : "已关闭：FTP 不再随 daemon 自动启动",
+    );
   };
 
-  // ===== 用户操作（立即保存；密码经 DPAPI 加密单独提交） =====
-  const saveUsers = async (users: FtpUser[], pwd?: { username: string; password: string }, okMsg?: string) => {
+  const saveDraft = async () => {
+    if (!draft) return;
+    await saveFtp(
+      {
+        ...ftp,
+        enabled: draft.enabled,
+        autostart: draft.autostart,
+        passive_port_start: draft.passive_port_start,
+        passive_port_end: draft.passive_port_end,
+        listeners: draft.listeners,
+      },
+      undefined,
+      "FTP 站点设置已保存",
+    );
+  };
+
+  const saveUsers = async (
+    users: FtpUser[],
+    pwd?: { username: string; password: string },
+    okMsg?: string,
+  ) => {
     await saveFtp(
       { ...ftp, users },
       pwd ? { ftp_user_password: pwd } : undefined,
@@ -124,53 +149,161 @@ export function AppsPage() {
     <div className="mx-auto max-w-3xl space-y-6">
       <header>
         <h1 className="text-xl font-semibold">应用功能</h1>
-        <p className="mt-1 text-xs text-muted">daemon 内置工具型功能；FTP、TCP 调试等后续功能统一在此页管理</p>
+        <p className="mt-1 text-xs text-muted">
+          daemon 内置工具型功能；点击标签切换不同工具
+        </p>
       </header>
 
+      {/* ===== 标签栏 ===== */}
+      <div className="flex gap-1 border-b border-surface-3">
+        {TABS.map((tab) => (
+          <button
+            key={tab.key}
+            disabled={tab.disabled}
+            className={`rounded-t-lg px-4 py-2 text-sm transition-colors ${
+              activeTab === tab.key
+                ? "border-b-2 border-accent bg-surface-2 font-medium text-accent"
+                : tab.disabled
+                  ? "cursor-not-allowed text-muted/50"
+                  : "text-muted hover:bg-surface-3 hover:text-content"
+            }`}
+            onClick={() => setActiveTab(tab.key)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ===== 标签内容 ===== */}
+      {activeTab === "ftp" && (
+        <FtpTab ftp={ftp} ftpData={ftpStatus.data} ftpError={ftpStatus.isError}
+          draft={draft} setDraft={setDraft}
+          toggleEnabled={toggleEnabled} toggleAutostart={toggleAutostart}
+          saveDraft={saveDraft} saveUsers={saveUsers} listenerRoots={listenerRoots}
+        />
+      )}
+      {activeTab === "more" && (
+        <section className="space-y-3 rounded-xl border border-surface-3 bg-surface-2 p-5">
+          <h2 className="text-sm font-semibold">更多工具（规划中）</h2>
+          <div className="flex items-center justify-between rounded-lg border border-dashed border-surface-3 p-4 opacity-60">
+            <div>
+              <p className="text-sm font-medium">TCP 调试助手</p>
+              <p className="text-xs text-muted">TCP/UDP 连通性测试与报文收发调试，后续版本上线</p>
+            </div>
+            <span className="text-xs text-muted">规划中</span>
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
+// ===== FTP 标签内容（独立组件避免主组件过长）=====
+
+function FtpTab({
+  ftp,
+  ftpData,
+  ftpError,
+  draft,
+  setDraft,
+  toggleEnabled,
+  toggleAutostart,
+  saveDraft,
+  saveUsers,
+  listenerRoots,
+}: {
+  ftp: FtpSettings;
+  ftpData?: { running: boolean; enabled: boolean; ports?: number[]; passive_port_start: number; passive_port_end: number; listeners: number; users: number; sessions: number; bytes_served?: number | null; bytes_received?: number | null; local_ip?: string | null; last_error?: string | null };
+  ftpError: boolean;
+  draft: FtpSettings | null;
+  setDraft: (d: FtpSettings | null) => void;
+  toggleEnabled: (v: boolean) => void;
+  toggleAutostart: (v: boolean) => void;
+  saveDraft: () => void;
+  saveUsers: (users: FtpUser[], pwd?: { username: string; password: string }, okMsg?: string) => void;
+  listenerRoots: { port: number; root: string }[];
+}) {
+  const pushToast = useUiStore((s) => s.pushToast);
+  // 站点折叠状态：已展开的站点索引集合
+  const [expandedSites, setExpandedSites] = useState<Set<number>>(new Set());
+
+  const toggleExpand = (i: number) => {
+    setExpandedSites((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i); else next.add(i);
+      return next;
+    });
+  };
+
+  return (
+    <>
       {/* ===== FTP 服务状态 ===== */}
       <section className="space-y-3 rounded-xl border border-surface-3 bg-surface-2 p-5">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold">FTP 服务</h2>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              className={checkCls}
-              checked={ftp.enabled}
-              onChange={(e) => void toggleEnabled(e.target.checked)}
-            />
-            启用
-          </label>
+          <div className="flex items-center gap-4">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                className={checkCls}
+                checked={ftp.autostart ?? false}
+                onChange={(e) => void toggleAutostart(e.target.checked)}
+              />
+              开机自启
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                className={checkCls}
+                checked={ftp.enabled}
+                onChange={(e) => void toggleEnabled(e.target.checked)}
+              />
+              启用
+            </label>
+          </div>
         </div>
-        {ftpStatus.isError ? (
+        {ftpError ? (
           <p className="text-xs text-err">状态获取失败（daemon 不可达或版本过旧）</p>
-        ) : ftpStatus.data ? (
+        ) : ftpData ? (
           <div className="space-y-1 text-sm">
             <p>
               <span className="text-muted">状态：</span>
-              {ftpStatus.data.running ? (
+              {ftpData.running ? (
                 <span className="font-medium text-ok">运行中</span>
-              ) : ftpStatus.data.enabled ? (
+              ) : ftpData.enabled ? (
                 <span className="font-medium text-warn">启动中/异常</span>
               ) : (
                 <span className="text-muted">已停用</span>
               )}
-              {ftpStatus.data.running && (ftpStatus.data.ports?.length ?? 0) > 0 && (
+              {ftpData.running && (ftpData.ports?.length ?? 0) > 0 && (
                 <span className="ml-2 font-mono text-xs">
-                  {ftpStatus.data.local_ip ? `ftp://${ftpStatus.data.local_ip}` : "ftp://本机IP"}
-                  {ftpStatus.data.ports!.map((p) => `:${p}`).join("、")}
+                  {ftpData.local_ip ? `ftp://${ftpData.local_ip}` : "ftp://本机IP"}
+                  {ftpData.ports!.map((p) => `:${p}`).join("、")}
                 </span>
               )}
-              {ftpStatus.data.running && (
-                <span className="ml-2 text-xs text-muted">在线会话 {ftpStatus.data.sessions}</span>
+              {ftpData.running && (
+                <span className="ml-2 text-xs text-muted">在线会话 {ftpData.sessions}</span>
               )}
             </p>
+            {ftpData.running && (
+              <p className="flex items-center gap-3 text-xs">
+                <span>
+                  <span className="text-muted">↑ 发送 </span>
+                  <span className="font-mono text-ok">{formatBytes(ftpData.bytes_served)}</span>
+                </span>
+                <span>
+                  <span className="text-muted">↓ 接收 </span>
+                  <span className="font-mono text-accent">{formatBytes(ftpData.bytes_received)}</span>
+                </span>
+              </p>
+            )}
             <p className="text-xs text-muted">
-              监听站点 {ftpStatus.data.listeners} 个 · 用户 {ftpStatus.data.users} 个 · 被动端口
-              {" "}{ftpStatus.data.passive_port_start}-{ftpStatus.data.passive_port_end}
-              {ftpStatus.data.passive_port_start === 0 && "（临时）"}
+              监听站点 {ftpData.listeners} 个 · 用户 {ftpData.users} 个 · 被动端口{" "}
+              {ftpData.passive_port_start}-{ftpData.passive_port_end}
+              {ftpData.passive_port_start === 0 && "（临时）"}
             </p>
-            {ftpStatus.data.last_error && (
-              <p className="text-xs text-err">最近错误：{ftpStatus.data.last_error}</p>
+            {ftpData.last_error && (
+              <p className="text-xs text-err">最近错误：{ftpData.last_error}</p>
             )}
             <p className="text-xs text-muted">
               局域网访问需在 Windows 防火墙放行对应端口；修改用户/权限后对新登录即时生效
@@ -181,7 +314,7 @@ export function AppsPage() {
         )}
       </section>
 
-      {/* ===== FTP 站点（多监听器：每端口一个根目录）===== */}
+      {/* ===== FTP 站点（默认折叠，点击展开）===== */}
       <section className="space-y-3 rounded-xl border border-surface-3 bg-surface-2 p-5">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold">FTP 站点（监听端口 → 根目录）</h2>
@@ -189,96 +322,139 @@ export function AppsPage() {
             className={btnSmall}
             onClick={() => {
               const base = draft ?? ftp;
+              const idx = base.listeners.length;
               setDraft({
                 ...base,
                 listeners: [
                   ...base.listeners,
-                  { name: `站点${base.listeners.length + 1}`, port: 21, root: "", enabled: true },
+                  { name: `站点${idx + 1}`, port: 21, root: "", enabled: true },
                 ],
               });
+              // 新站点默认折叠（不展开）
             }}
           >
             添加站点
           </button>
         </div>
         {!draft || draft.listeners.length === 0 ? (
-          <p className="text-xs text-muted">尚未配置站点。每个站点 = 一个控制端口 + 一个根目录，用户登录后被限制在对应根目录内。</p>
+          <p className="text-xs text-muted">
+            尚未配置站点。每个站点 = 一个控制端口 + 一个根目录，用户登录后被限制在对应根目录内。
+          </p>
         ) : (
           <div className="space-y-2">
-            {draft.listeners.map((l, i) => (
-              <div
-                key={i}
-                className="flex flex-wrap items-center gap-2 rounded-lg border border-surface-3 p-2"
-              >
-                <input
-                  className={`${inputCls} w-32`}
-                  placeholder="站点名称"
-                  value={l.name}
-                  onChange={(e) => {
-                    const ls = [...draft.listeners];
-                    ls[i] = { ...l, name: e.target.value };
-                    setDraft({ ...draft, listeners: ls });
-                  }}
-                />
-                <input
-                  className={`${inputCls} w-24 font-mono`}
-                  type="number"
-                  min={1}
-                  max={65535}
-                  placeholder="端口"
-                  value={l.port}
-                  onChange={(e) => {
-                    const ls = [...draft.listeners];
-                    ls[i] = { ...l, port: Number(e.target.value) || 0 };
-                    setDraft({ ...draft, listeners: ls });
-                  }}
-                />
-                <input
-                  className={`${inputCls} flex-1 font-mono text-xs`}
-                  placeholder="根目录（如 D:\\ftp）"
-                  value={l.root}
-                  onChange={(e) => {
-                    const ls = [...draft.listeners];
-                    ls[i] = { ...l, root: e.target.value };
-                    setDraft({ ...draft, listeners: ls });
-                  }}
-                />
-                <button
-                  className={btnSmall}
-                  onClick={async () => {
-                    const picked = await open({ directory: true, title: "选择站点根目录" });
-                    if (typeof picked === "string") {
-                      const ls = [...draft.listeners];
-                      ls[i] = { ...l, root: picked };
-                      setDraft({ ...draft, listeners: ls });
-                    }
-                  }}
+            {draft.listeners.map((l, i) => {
+              const expanded = expandedSites.has(i);
+              return (
+                <div
+                  key={i}
+                  className="rounded-lg border border-surface-3"
                 >
-                  选择目录
-                </button>
-                <label className="flex items-center gap-1 text-xs">
-                  <input
-                    type="checkbox"
-                    className={checkCls}
-                    checked={l.enabled}
-                    onChange={(e) => {
-                      const ls = [...draft.listeners];
-                      ls[i] = { ...l, enabled: e.target.checked };
-                      setDraft({ ...draft, listeners: ls });
-                    }}
-                  />
-                  启用
-                </label>
-                <button
-                  className={btnSmall}
-                  onClick={() =>
-                    setDraft({ ...draft, listeners: draft.listeners.filter((_, j) => j !== i) })
-                  }
-                >
-                  删除
-                </button>
-              </div>
-            ))}
+                  {/* 折叠态摘要行 */}
+                  <div
+                    className="flex cursor-pointer items-center gap-2 px-3 py-2 hover:bg-surface-3/50"
+                    onClick={() => toggleExpand(i)}
+                  >
+                    <span className={`text-xs transition-transform ${expanded ? "rotate-90" : ""}`}>
+                      ▶
+                    </span>
+                    <span className="text-sm font-medium">{l.name || "未命名"}</span>
+                    <span className="font-mono text-xs text-muted">:{l.port}</span>
+                    <span className="flex-1 truncate font-mono text-xs text-muted">
+                      {l.root || "未设置根目录"}
+                    </span>
+                    {!l.enabled && (
+                      <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[10px] text-muted">
+                        已禁用
+                      </span>
+                    )}
+                    <button
+                      className={btnSmall}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDraft({
+                          ...draft!,
+                          listeners: draft!.listeners.filter((_, j) => j !== i),
+                        });
+                        setExpandedSites((prev) => {
+                          const next = new Set(prev);
+                          next.delete(i);
+                          // 后续索引前移，调整
+                          return new Set([...next].map((n) => (n > i ? n - 1 : n)));
+                        });
+                      }}
+                    >
+                      删除
+                    </button>
+                  </div>
+                  {/* 展开态编辑表单 */}
+                  {expanded && (
+                    <div className="border-t border-surface-3 px-3 py-3 space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          className={`${inputCls} w-32`}
+                          placeholder="站点名称"
+                          value={l.name}
+                          onChange={(e) => {
+                            const ls = [...draft!.listeners];
+                            ls[i] = { ...l, name: e.target.value };
+                            setDraft({ ...draft!, listeners: ls });
+                          }}
+                        />
+                        <input
+                          className={`${inputCls} w-24 font-mono`}
+                          type="number"
+                          min={1}
+                          max={65535}
+                          placeholder="端口"
+                          value={l.port}
+                          onChange={(e) => {
+                            const ls = [...draft!.listeners];
+                            ls[i] = { ...l, port: Number(e.target.value) || 0 };
+                            setDraft({ ...draft!, listeners: ls });
+                          }}
+                        />
+                        <input
+                          className={`${inputCls} flex-1 font-mono text-xs`}
+                          placeholder="根目录（如 D:\\ftp）"
+                          value={l.root}
+                          onChange={(e) => {
+                            const ls = [...draft!.listeners];
+                            ls[i] = { ...l, root: e.target.value };
+                            setDraft({ ...draft!, listeners: ls });
+                          }}
+                        />
+                        <button
+                          className={btnSmall}
+                          onClick={async () => {
+                            const picked = await open({ directory: true, title: "选择站点根目录" });
+                            if (typeof picked === "string") {
+                              const ls = [...draft!.listeners];
+                              ls[i] = { ...l, root: picked };
+                              setDraft({ ...draft!, listeners: ls });
+                            }
+                          }}
+                        >
+                          选择目录
+                        </button>
+                        <label className="flex items-center gap-1 text-xs">
+                          <input
+                            type="checkbox"
+                            className={checkCls}
+                            checked={l.enabled}
+                            onChange={(e) => {
+                              const ls = [...draft!.listeners];
+                              ls[i] = { ...l, enabled: e.target.checked };
+                              setDraft({ ...draft!, listeners: ls });
+                            }}
+                          />
+                          启用
+                        </label>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
         <div className="flex items-end gap-3">
@@ -330,7 +506,6 @@ export function AppsPage() {
               }
               const password = window.prompt(`设置 ${username} 的登录密码：`);
               if (password == null || password === "") return;
-              // 默认授权全部站点根（未授权任何目录的用户无法登录）
               void saveUsers(
                 [
                   ...ftp.users,
@@ -373,18 +548,27 @@ export function AppsPage() {
               {ftp.users.map((u) => (
                 <tr key={u.username} className="border-b border-surface-3/50 last:border-0">
                   <td className="py-2 pr-3 font-mono text-xs">{u.username}</td>
-                  <td className="max-w-40 truncate py-2 pr-3 font-mono text-xs text-muted" title={u.allowed_roots.join("\n")}>
+                  <td
+                    className="max-w-40 truncate py-2 pr-3 font-mono text-xs text-muted"
+                    title={u.allowed_roots.join("\n")}
+                  >
                     {u.allowed_roots.length === 0
                       ? "未授权（无法登录）"
                       : u.allowed_roots.join("、")}
                   </td>
                   <td className="py-2 pr-3 text-xs">
                     <span className="text-muted">
-                      {PERMISSION_ITEMS.filter((p) => u.permissions[p.key]).map((p) => p.label).join("·") || "无"}
+                      {PERMISSION_ITEMS.filter((p) => u.permissions[p.key])
+                        .map((p) => p.label)
+                        .join("·") || "无"}
                     </span>
                   </td>
                   <td className="py-2 pr-3 text-xs">
-                    {u.enabled ? <span className="text-ok">启用</span> : <span className="text-muted">停用</span>}
+                    {u.enabled ? (
+                      <span className="text-ok">启用</span>
+                    ) : (
+                      <span className="text-muted">停用</span>
+                    )}
                   </td>
                   <td className="flex gap-1 py-2">
                     <FtpUserEditButton
@@ -412,23 +596,11 @@ export function AppsPage() {
           </table>
         )}
       </section>
-
-      {/* ===== 规划中的工具 ===== */}
-      <section className="space-y-3 rounded-xl border border-surface-3 bg-surface-2 p-5">
-        <h2 className="text-sm font-semibold">更多工具（规划中）</h2>
-        <div className="flex items-center justify-between rounded-lg border border-dashed border-surface-3 p-4 opacity-60">
-          <div>
-            <p className="text-sm font-medium">TCP 调试助手</p>
-            <p className="text-xs text-muted">TCP/UDP 连通性测试与报文收发调试，后续版本上线</p>
-          </div>
-          <span className="text-xs text-muted">规划中</span>
-        </div>
-      </section>
-    </div>
+    </>
   );
 }
 
-/** 用户编辑入口按钮 + 弹窗（单独组件避免污染主组件 hooks） */
+// ===== 用户编辑弹窗 =====
 
 function FtpUserEditButton({
   user,
@@ -465,7 +637,6 @@ function FtpUserEditButton({
   );
 }
 
-/** 用户编辑弹窗：密码留空 = 不修改；授权目录 = 站点根勾选 + 自定义目录 */
 function FtpUserDialog({
   user,
   listenerRoots,
@@ -489,7 +660,8 @@ function FtpUserDialog({
 
   const submit = () => {
     if (!username.trim()) return setErr("用户名不能为空");
-    if (!/^[A-Za-z0-9_.@-]{1,64}$/.test(username)) return setErr("用户名限 1-64 位字母数字与 _.@-");
+    if (!/^[A-Za-z0-9_.@-]{1,64}$/.test(username))
+      return setErr("用户名限 1-64 位字母数字与 _.@-");
     if (roots.length === 0) return setErr("至少授权一个目录，否则用户无法登录");
     onSubmit(
       { username: username.trim(), allowed_roots: roots, permissions: perms, enabled },
@@ -505,7 +677,11 @@ function FtpUserDialog({
         <div className="grid grid-cols-2 gap-3">
           <label className="space-y-1 text-xs text-muted">
             用户名
-            <input className={inputCls} value={username} onChange={(e) => setUsername(e.target.value)} />
+            <input
+              className={inputCls}
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
           </label>
           <label className="space-y-1 text-xs text-muted">
             重置密码（留空 = 不修改）
@@ -520,7 +696,9 @@ function FtpUserDialog({
         </div>
 
         <div className="space-y-1">
-          <p className="text-xs text-muted">授权目录（勾选站点根；其余授权目录将挂载为虚拟子目录）</p>
+          <p className="text-xs text-muted">
+            授权目录（勾选站点根；其余授权目录将挂载为虚拟子目录）
+          </p>
           {listenerRoots.map((root) => (
             <label key={root} className="flex items-center gap-2 text-sm">
               <input
@@ -536,7 +714,12 @@ function FtpUserDialog({
             .filter((r) => !listenerRoots.includes(r))
             .map((root) => (
               <label key={root} className="flex items-center gap-2 text-sm">
-                <input type="checkbox" className={checkCls} checked onChange={() => toggleRoot(root)} />
+                <input
+                  type="checkbox"
+                  className={checkCls}
+                  checked
+                  onChange={() => toggleRoot(root)}
+                />
                 <span className="font-mono text-xs">自定义：{root}</span>
               </label>
             ))}
@@ -544,7 +727,8 @@ function FtpUserDialog({
             className={btnSmall}
             onClick={async () => {
               const picked = await open({ directory: true, title: "添加授权目录" });
-              if (typeof picked === "string" && !roots.includes(picked)) setRoots([...roots, picked]);
+              if (typeof picked === "string" && !roots.includes(picked))
+                setRoots([...roots, picked]);
             }}
           >
             添加自定义目录
@@ -569,7 +753,12 @@ function FtpUserDialog({
         </div>
 
         <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" className={checkCls} checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+          <input
+            type="checkbox"
+            className={checkCls}
+            checked={enabled}
+            onChange={(e) => setEnabled(e.target.checked)}
+          />
           启用该用户
         </label>
 

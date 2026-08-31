@@ -594,6 +594,8 @@ async fn dispatch(state: &AppState, req: &Request) -> Result<Value, RpcError> {
                 "listeners": ftp.listeners.len(),
                 "users": ftp.users.iter().filter(|u| u.enabled).count(),
                 "sessions": rt.sessions,
+                "bytes_served": rt.bytes_served,
+                "bytes_received": rt.bytes_received,
                 "local_ip": rt.local_ip,
                 "last_error": rt.last_error,
             }))

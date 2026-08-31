@@ -105,6 +105,7 @@ fn app_with(
     cli_companion_daemon::app_config::AppConfig {
         ftp: FtpSettings {
             enabled: true,
+            autostart: false,
             passive_port_start: passive.0,
             passive_port_end: passive.1,
             listeners: vec![FtpListener {
@@ -691,6 +692,7 @@ async fn 多监听器不同端口不同根() {
     let app = cli_companion_daemon::app_config::AppConfig {
         ftp: FtpSettings {
             enabled: true,
+            autostart: false,
             passive_port_start: 0,
             passive_port_end: 0,
             listeners: vec![
@@ -834,6 +836,7 @@ async fn 监督任务随配置启停换端口且改用户不重启() {
     let mk_app = |enabled: bool, port: u16| AppConfig {
         ftp: FtpSettings {
             enabled,
+            autostart: false,
             passive_port_start: 0,
             passive_port_end: 0,
             listeners: vec![FtpListener {
